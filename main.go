@@ -53,7 +53,7 @@ func (t *Tracker) getTorrent(hash string) *Torrent {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 
-	if t.torrents[hash] == nil {
+	if _, ok := t.torrents[hash]; !ok {
 		t.torrents[hash] = &Torrent{peers: make(map[string]*Peer)}
 		debug("created new torrent %s", hash)
 	}
@@ -138,15 +138,15 @@ func (t *Torrent) getPeersAndCount(exclude string, numWant int) (peers4, peers6 
 
 // parseHash converts various hash formats to a normalized hex string.
 func parseHash(hashParam string) (string, error) {
-	// 40 hex chars = already hex-encoded 20 bytes (no unescaping needed)
-	if decoded, err := hex.DecodeString(hashParam); err == nil && len(decoded) == 20 {
-		return strings.ToLower(hashParam), nil
+	// BitTorrent BEP 3 says info_hash should be URL-encoded in query params.
+	// Try URL unescaping first for percent-encoded binary (e.g., %12%34...)
+	if unescaped, err := url.QueryUnescape(hashParam); err == nil && len(unescaped) == 20 {
+		return hex.EncodeToString([]byte(unescaped)), nil
 	}
 
-	// BitTorrent BEP 3 says info_hash should be URL-encoded in query params.
-	// Try URL unescaping for percent-encoded binary (e.g., %12%34...)
-	if d, err := url.QueryUnescape(hashParam); err == nil {
-		hashParam = d
+	// 40 hex chars = already hex-encoded 20 bytes
+	if decoded, err := hex.DecodeString(hashParam); err == nil && len(decoded) == 20 {
+		return strings.ToLower(hashParam), nil
 	}
 
 	// 20 raw bytes need hex encoding
@@ -224,13 +224,13 @@ func (tr *Tracker) announce(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	numWant, _ := strconv.Atoi(q.Get("numwant"))
+	numWant, _ := strconv.Atoi(q.Get("numwant")) // ignore parse error, use default
 	if numWant == 0 || numWant > 50 {
 		numWant = 50
 	}
 	debug("numwant: %d", numWant)
 
-	left, _ := strconv.ParseInt(q.Get("left"), 10, 64)
+	left, _ := strconv.ParseInt(q.Get("left"), 10, 64) // ignore parse error, assume seeder
 	torrent := tr.getTorrent(infoHash)
 	clientIP := getIP(r)
 	event := q.Get("event")
