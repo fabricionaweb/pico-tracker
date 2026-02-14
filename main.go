@@ -38,7 +38,7 @@ const (
 	announceInterval = 600
 )
 
-// enables detailed logging when set via DEBUG env var or -debug flag.
+// enables detailed logging when set via DEBUG env var or -debug flag
 var debugMode = os.Getenv("DEBUG") != ""
 
 func debug(format string, v ...any) {
@@ -47,16 +47,16 @@ func debug(format string, v ...any) {
 	}
 }
 
-// Peer represents someone downloading or seeding a torrent.
-// Each peer has an IP address, port number, and how much they have left to download.
+// Peer represents someone downloading or seeding a torrent
+// Each peer has an IP address, port number, and how much they have left to download
 type Peer struct {
 	IP   net.IP
 	Port uint16
 	Left int64 // bytes remaining (0 = they have the complete file = seeder, >0 = still downloading = leecher)
 }
 
-// Torrent keeps track of everyone sharing a specific file (identified by its info_hash).
-// We count how many people have the complete file (seeders) vs are still downloading (leechers).
+// Torrent keeps track of everyone sharing a specific file (identified by its info_hash)
+// We count how many people have the complete file (seeders) vs are still downloading (leechers)
 type Torrent struct {
 	mu       sync.RWMutex
 	peers    map[string]*Peer // key is peer_id (unique identifier for each BitTorrent client)
@@ -64,13 +64,13 @@ type Torrent struct {
 	leechers int
 }
 
-// Tracker manages multiple torrents (different files being shared).
+// Tracker manages multiple torrents (different files being shared)
 type Tracker struct {
 	mu       sync.RWMutex
 	torrents map[string]*Torrent // key is info_hash (unique identifier for each torrent)
 }
 
-// getTorrent finds or creates a Torrent entry for the given info_hash.
+// getTorrent finds or creates a Torrent entry for the given info_hash
 func (t *Tracker) getTorrent(hash string) *Torrent {
 	t.mu.Lock()
 	defer t.mu.Unlock()
@@ -83,14 +83,14 @@ func (t *Tracker) getTorrent(hash string) *Torrent {
 	return t.torrents[hash]
 }
 
-// addPeer registers a new peer or updates an existing one's information.
-// If this peer was a seeder and now isn't (or vice versa), we update our counts.
+// addPeer registers a new peer or updates an existing one's information
+// If this peer was a seeder and now isn't (or vice versa), we update our counts
 func (t *Torrent) addPeer(id string, ip net.IP, port uint16, left int64) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 
 	if p, exists := t.peers[id]; exists {
-		// Peer already exists, check if they changed from seeder to leecher or vice versa.
+		// Peer already exists, check if they changed from seeder to leecher or vice versa
 		if p.Left == 0 && left > 0 {
 			t.seeders--
 			t.leechers++
@@ -104,7 +104,7 @@ func (t *Torrent) addPeer(id string, ip net.IP, port uint16, left int64) {
 		return
 	}
 
-	// New peer joining.
+	// New peer joining
 	if left == 0 {
 		t.seeders++
 	} else {
@@ -114,7 +114,7 @@ func (t *Torrent) addPeer(id string, ip net.IP, port uint16, left int64) {
 	debug("added peer %s @ %s:%d", id, ip, port)
 }
 
-// removePeer removes a peer when they disconnect (eventStopped).
+// removePeer removes a peer when they disconnect (eventStopped)
 func (t *Torrent) removePeer(id string) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
@@ -125,7 +125,7 @@ func (t *Torrent) removePeer(id string) {
 		return
 	}
 
-	// Peer is leaving.
+	// Peer is leaving
 	if p.Left == 0 {
 		t.seeders--
 	} else {
@@ -135,10 +135,10 @@ func (t *Torrent) removePeer(id string) {
 	debug("removed peer %s @ %s:%d", id, p.IP, p.Port)
 }
 
-// getPeersAndCount returns a list of other peers for the client to connect to.
-// We return up to numWant peers, not including the requesting peer.
+// getPeersAndCount returns a list of other peers for the client to connect to
+// We return up to numWant peers, not including the requesting peer
 // The returned data is packed as: [4 bytes IP][2 bytes port] for IPv4,
-// or [16 bytes IP][2 bytes port] for IPv6.
+// or [16 bytes IP][2 bytes port] for IPv6
 func (t *Torrent) getPeersAndCount(exclude string, numWant int) (peers4, peers6 []byte, seeders, leechers int) {
 	t.mu.RLock()
 	defer t.mu.RUnlock()
@@ -170,16 +170,16 @@ func (t *Torrent) getPeersAndCount(exclude string, numWant int) (peers4, peers6 
 	return peers4, peers6, seeders, leechers
 }
 
-// handleConnect is the first step in UDP tracker communication.
+// handleConnect is the first step in UDP tracker communication
 // The client sends a "connect" request to establish a session, and we give them
-// a connection ID they must use in all future requests to prove they're legitimate.
-// This prevents IP spoofing attacks where someone could fake announce requests.
+// a connection ID they must use in all future requests to prove they're legitimate
+// This prevents IP spoofing attacks where someone could fake announce requests
 func (tr *Tracker) handleConnect(conn *net.UDPConn, addr *net.UDPAddr, transactionID uint32) {
 	debug("connect request from %s, transaction_id=%d", addr, transactionID)
 
-	// Generate a connection ID - this should be unpredictable to prevent spoofing.
-	// In production, you'd want to use crypto/rand or at least include the client's IP.
-	// For simplicity, we use current timestamp, but this is not secure against spoofing.
+	// Generate a connection ID - this should be unpredictable to prevent spoofing
+	// In production, you'd want to use crypto/rand or at least include the client's IP
+	// For simplicity, we use current timestamp, but this is not secure against spoofing
 	connectionID := uint64(time.Now().Unix())
 
 	// Response format: [action:4][transaction_id:4][connection_id:8]
@@ -200,9 +200,8 @@ func (tr *Tracker) handleConnect(conn *net.UDPConn, addr *net.UDPAddr, transacti
 }
 
 // handleAnnounce is the main interaction - a client tells us they're downloading
-// and asks for a list of other people to connect to.
+// and asks for a list of other people to connect to
 // Announce packet format from client:
-//
 //	[connection_id:8] [action:4] [transaction_id:4] [info_hash:20] [peer_id:20]
 //	[downloaded:8] [left:8] [uploaded:8] [event:4] [IP:4] [key:4] [num_want:4] [port:2]
 func (tr *Tracker) handleAnnounce(conn *net.UDPConn, addr *net.UDPAddr, packet []byte, transactionID uint32) {
@@ -213,7 +212,7 @@ func (tr *Tracker) handleAnnounce(conn *net.UDPConn, addr *net.UDPAddr, packet [
 		return
 	}
 
-	// Parse the announce request fields.
+	// Parse the announce request fields
 	infoHash := hex.EncodeToString(packet[16:36]) // 20 bytes - identifies which torrent
 	peerID := hex.EncodeToString(packet[36:56])   // 20 bytes - identifies this specific client
 	// Skip downloaded (bytes 56:64) - tracker doesn't need this
@@ -238,8 +237,8 @@ func (tr *Tracker) handleAnnounce(conn *net.UDPConn, addr *net.UDPAddr, packet [
 
 	// num_want=-1 means "default" (0xFFFFFFFF as uint32)
 	// num_want=0 means "not specified"
-	// Both cases should use the tracker's default of 50 peers.
-	// Also clamp anything above 50 to prevent excessive responses.
+	// Both cases should use the tracker's default of 50 peers
+	// Also clamp anything above 50 to prevent excessive responses
 	if numWant == 0 || numWant == 0xFFFFFFFF || numWant > 50 {
 		numWant = 50
 	}
@@ -261,7 +260,7 @@ func (tr *Tracker) handleAnnounce(conn *net.UDPConn, addr *net.UDPAddr, packet [
 		torrent.addPeer(peerID, clientIP, port, int64(left))
 	}
 
-	// Get lists of IPv4 and IPv6 peers.
+	// Get lists of IPv4 and IPv6 peers
 	peers4, peers6, seeders, leechers := torrent.getPeersAndCount(peerID, int(numWant))
 
 	// Return peers matching the client's IP type
@@ -301,9 +300,9 @@ func (tr *Tracker) handleAnnounce(conn *net.UDPConn, addr *net.UDPAddr, packet [
 	}
 }
 
-// handleScrape lets clients ask for statistics about torrents without announcing.
-// This is useful for checking if a torrent is active before downloading.
-// Scrape request format: [connection_id:8][action:4][transaction_id:4][info_hash:20]...
+// handleScrape lets clients ask for statistics about torrents without announcing
+// This is useful for checking if a torrent is active before downloading
+// Scrape request format: [connection_id:8][action:4][transaction_id:4][info_hash:20]
 // (can include multiple info_hashes)
 func (tr *Tracker) handleScrape(conn *net.UDPConn, addr *net.UDPAddr, packet []byte, transactionID uint32) {
 	// Info hashes start at byte 16, each is 20 bytes
@@ -350,7 +349,7 @@ func (tr *Tracker) handleScrape(conn *net.UDPConn, addr *net.UDPAddr, packet []b
 	}
 }
 
-// sendError sends an error message back to the client when something goes wrong.
+// sendError sends an error message back to the client when something goes wrong
 // Error format: [action:4][transaction_id:4][error_message:variable]
 // Fixed header: 4 + 4 = 8 bytes, then variable length error message
 func (tr *Tracker) sendError(conn *net.UDPConn, addr *net.UDPAddr, transactionID uint32, message string) {
@@ -368,9 +367,8 @@ func (tr *Tracker) sendError(conn *net.UDPConn, addr *net.UDPAddr, transactionID
 	}
 }
 
-// handlePacket processes any incoming UDP packet and routes it to the right handler.
+// handlePacket processes any incoming UDP packet and routes it to the right handler
 // All UDP tracker packets start with:
-//
 //	[connection_id:8] - identifies the session (or protocolID for connect)
 //	[action:4] - what they want to do (connect/announce/scrape)
 //	[transaction_id:4] - random number client sends, we echo it back (so they can match responses)
@@ -418,9 +416,9 @@ func (tr *Tracker) handlePacket(conn *net.UDPConn, addr *net.UDPAddr, packet []b
 	}
 }
 
-// cleanupLoop runs periodically to remove inactive torrents and free memory.
+// cleanupLoop runs periodically to remove inactive torrents and free memory
 // In a production tracker, you'd want to be smarter about this and only
-// remove torrents with no active peers, not just clear everything.
+// remove torrents with no active peers, not just clear everything
 func (tr *Tracker) cleanupLoop() {
 	ticker := time.NewTicker(30 * time.Minute)
 	defer ticker.Stop()
