@@ -18,6 +18,15 @@ import (
 	"github.com/jackpal/bencode-go"
 )
 
+// Logging: DEBUG=1 env var enables debug output
+var debugMode = os.Getenv("DEBUG") != ""
+
+func debug(format string, v ...any) {
+	if debugMode {
+		log.Printf("[DEBUG] "+format, v...)
+	}
+}
+
 type Peer struct {
 	IP   net.IP
 	Port uint16
@@ -41,6 +50,7 @@ func (t *Tracker) getTorrent(hash string) *Torrent {
 	defer t.mu.Unlock()
 	if t.torrents[hash] == nil {
 		t.torrents[hash] = &Torrent{Peers: map[string]*Peer{}}
+		debug("created new torrent %s", hash)
 	}
 	return t.torrents[hash]
 }
@@ -54,6 +64,9 @@ func (t *Torrent) addPeer(id string, ip net.IP, port uint16, left int64) {
 		} else {
 			t.Leechers--
 		}
+		debug("updated peer %s: %s:%d -> %s:%d (left: %d -> %d)", id, p.IP, p.Port, ip, port, p.Left, left)
+	} else {
+		debug("added peer %s @ %s:%d (left: %d)", id, ip, port, left)
 	}
 	t.Peers[id] = &Peer{IP: ip, Port: port, Left: left}
 	if left == 0 {
@@ -72,6 +85,7 @@ func (t *Torrent) removePeer(id string) {
 		} else {
 			t.Leechers--
 		}
+		debug("removed peer %s @ %s:%d", id, p.IP, p.Port)
 		delete(t.Peers, id)
 	}
 }
@@ -164,23 +178,31 @@ func (tr *Tracker) announce(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	infoHash, err := parseHash(q.Get("info_hash"))
+	infoHashRaw := q.Get("info_hash")
+	peerIDRaw := q.Get("peer_id")
+
+	infoHash, err := parseHash(infoHashRaw)
 	if err != nil {
+		debug("bad info_hash: %q", infoHashRaw)
 		w.WriteHeader(http.StatusBadRequest)
 		bencode.Marshal(w, map[string]any{"failure reason": "bad info_hash"})
 		return
 	}
 
-	peerID, err := parseHash(q.Get("peer_id"))
+	peerID, err := parseHash(peerIDRaw)
 	if err != nil {
+		debug("bad peer_id: %q", peerIDRaw)
 		w.WriteHeader(http.StatusBadRequest)
 		bencode.Marshal(w, map[string]any{"failure reason": "bad peer_id"})
 		return
 	}
 
+	debug("info_hash=%s peer_id=%s", infoHash, peerID)
+
 	// Parse port as unsigned 16-bit int (validates 1-65535 range automatically)
 	port, err := strconv.ParseUint(q.Get("port"), 10, 16)
 	if err != nil || port == 0 {
+		debug("bad port: %q", q.Get("port"))
 		w.WriteHeader(http.StatusBadRequest)
 		bencode.Marshal(w, map[string]any{"failure reason": "bad port"})
 		return
@@ -191,24 +213,42 @@ func (tr *Tracker) announce(w http.ResponseWriter, r *http.Request) {
 	if numWant == 0 || numWant > 50 {
 		numWant = 50
 	}
+	debug("numwant: %d", numWant)
 
 	// Parse bytes remaining: base 10, 64-bit integer. left=0 means peer has complete file (seeder)
 	left, _ := strconv.ParseInt(q.Get("left"), 10, 64)
 
 	torrent := tr.getTorrent(infoHash)
+	clientIP := getIP(r)
 
-	if q.Get("event") == "stopped" {
+	debug("client IP: %s, port: %d, left: %d", clientIP, port, left)
+	debug("torrent has %d peers", len(torrent.Peers))
+	for id, p := range torrent.Peers {
+		debug("  existing peer: %s @ %s:%d (left: %d)", id, p.IP, p.Port, p.Left)
+	}
+
+	event := q.Get("event")
+	if event == "stopped" {
+		debug("event=stopped")
 		torrent.removePeer(peerID)
 	} else {
-		torrent.addPeer(peerID, getIP(r), uint16(port), left)
+		switch event {
+		case "completed":
+			debug("event=completed")
+		case "started":
+			debug("event=started")
+		}
+		torrent.addPeer(peerID, clientIP, uint16(port), left)
 	}
 
 	peers4, peers6, seeders, leechers := torrent.getPeersAndCount(peerID, numWant)
 
+	debug("returning %d seeders, %d leechers, %d peers4 bytes, %d peers6 bytes", seeders, leechers, len(peers4), len(peers6))
+
 	w.Header().Set("Content-Type", "text/plain")
 	bencode.Marshal(w, map[string]any{
-		"interval":     1800, // Client should re-announce after 30 minutes
-		"min interval": 900,  // Minimum 15 minutes between announces
+		"interval":     10 * 60, // Minutes to client re-announce
+		"min interval": 3 * 60,  // Minutes between announces
 		"complete":     seeders,
 		"incomplete":   leechers,
 		"peers":        peers4,
@@ -220,14 +260,18 @@ func (tr *Tracker) cleanupLoop() {
 	// Clear all peers every 30 minutes to prevent memory growth and stale connections
 	for range time.Tick(30 * time.Minute) {
 		tr.mu.Lock()
+		count := len(tr.torrents)
 		for hash, t := range tr.torrents {
 			t.mu.Lock()
+			peerCount := len(t.Peers)
 			t.Peers = make(map[string]*Peer)
 			t.Seeders, t.Leechers = 0, 0
 			t.mu.Unlock()
+			debug("cleanup: removed torrent %s with %d peers", hash, peerCount)
 			delete(tr.torrents, hash)
 		}
 		tr.mu.Unlock()
+		debug("cleanup: cleared %d torrents", count)
 	}
 }
 
@@ -243,6 +287,7 @@ func main() {
 	}
 
 	addr := flag.String("addr", defaultAddr, "bind address")
+	flag.BoolVar(&debugMode, "debug", debugMode, "enable debug logs")
 	flag.Parse()
 
 	tracker := &Tracker{torrents: map[string]*Torrent{}}
@@ -250,8 +295,8 @@ func main() {
 
 	http.HandleFunc("/", tracker.announce)
 
-	log.Printf("Tracker listening on http://%s", *addr)
+	log.Printf("[INFO] Tracker listening on http://%s", *addr)
 	if err := http.ListenAndServe(*addr, nil); err != nil {
-		log.Fatalf("Server error: %v", err)
+		log.Fatalf("[ERROR] Server error: %v", err)
 	}
 }
