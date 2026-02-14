@@ -19,6 +19,7 @@
 
 #### Go
 - No unnecessary comments
+- No trailing periods on comments
 - Trust initialization patterns (e.g., maps created by constructors)
 - Use `go vet`, `gofmt`, and `staticcheck`
 - Keep methods focused and minimal
@@ -141,7 +142,7 @@
 - Only commit when explicitly asked
 - Check for untracked files
 - Verify no secrets before committing
-- Use clear, concise commit messages
+- Use conventional commit format: `<type>: <description>` (e.g., `feat:`, `fix:`, `refactor:`, `docs:`, `chore:`)
 - **REQUIRED**: Use `--trailer 'Co-authored-by: Kimi 2.5 <kimi@moonshot.cn>'`
 
 ---
