@@ -18,7 +18,7 @@ import (
 	"github.com/jackpal/bencode-go"
 )
 
-// Logging: DEBUG=1 env var enables debug output
+// enables detailed logging when set via DEBUG env var or -debug flag.
 var debugMode = os.Getenv("DEBUG") != ""
 
 func debug(format string, v ...any) {
@@ -27,85 +27,98 @@ func debug(format string, v ...any) {
 	}
 }
 
+// Peer represents a BitTorrent peer in a swarm.
 type Peer struct {
 	IP   net.IP
 	Port uint16
 	Left int64 // bytes remaining (0 = seeder, >0 = leecher)
 }
 
+// Torrent tracks all peers for a specific info hash.
 type Torrent struct {
-	Peers    map[string]*Peer
-	Seeders  int
-	Leechers int
 	mu       sync.RWMutex
+	peers    map[string]*Peer
+	seeders  int
+	leechers int
 }
 
+// Tracker manages multiple torrent swarms.
 type Tracker struct {
-	torrents map[string]*Torrent
 	mu       sync.RWMutex
+	torrents map[string]*Torrent
 }
 
+// getTorrent returns the torrent for the given hash, creating it if needed.
 func (t *Tracker) getTorrent(hash string) *Torrent {
 	t.mu.Lock()
 	defer t.mu.Unlock()
+
 	if t.torrents[hash] == nil {
-		t.torrents[hash] = &Torrent{Peers: map[string]*Peer{}}
+		t.torrents[hash] = &Torrent{peers: make(map[string]*Peer)}
 		debug("created new torrent %s", hash)
 	}
+
 	return t.torrents[hash]
 }
 
+// addPeer registers or updates a peer in the torrent.
 func (t *Torrent) addPeer(id string, ip net.IP, port uint16, left int64) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
-	if p, ok := t.Peers[id]; ok {
+
+	if p, exists := t.peers[id]; exists {
 		if p.Left == 0 {
-			t.Seeders--
+			t.seeders--
 		} else {
-			t.Leechers--
+			t.leechers--
 		}
-		debug("updated peer %s: %s:%d -> %s:%d (left: %d -> %d)", id, p.IP, p.Port, ip, port, p.Left, left)
+		debug("updated peer %s: %s:%d -> %s:%d (left: %d -> %d)",
+			id, p.IP, p.Port, ip, port, p.Left, left)
 	} else {
 		debug("added peer %s @ %s:%d (left: %d)", id, ip, port, left)
 	}
-	t.Peers[id] = &Peer{IP: ip, Port: port, Left: left}
+
+	t.peers[id] = &Peer{IP: ip, Port: port, Left: left}
 	if left == 0 {
-		t.Seeders++
+		t.seeders++
 	} else {
-		t.Leechers++
+		t.leechers++
 	}
 }
 
+// removePeer removes a peer from the torrent.
 func (t *Torrent) removePeer(id string) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
-	if p, ok := t.Peers[id]; ok {
+
+	if p, exists := t.peers[id]; exists {
 		if p.Left == 0 {
-			t.Seeders--
+			t.seeders--
 		} else {
-			t.Leechers--
+			t.leechers--
 		}
 		debug("removed peer %s @ %s:%d", id, p.IP, p.Port)
-		delete(t.Peers, id)
+		delete(t.peers, id)
 	}
 }
 
+// getPeersAndCount returns peer lists and counts, excluding the requesting peer.
 func (t *Torrent) getPeersAndCount(exclude string, numWant int) (peers4, peers6 []byte, seeders, leechers int) {
 	t.mu.RLock()
 	defer t.mu.RUnlock()
 
-	// Return cached counters - O(1) instead of O(n)
-	seeders, leechers = t.Seeders, t.Leechers
+	seeders, leechers = t.seeders, t.leechers
 
-	// Build compact peer list up to numWant (check actual byte count instead of counter)
-	for id, p := range t.Peers {
+	for id, p := range t.peers {
 		if id == exclude {
 			continue
 		}
+
 		// Stop when we have enough peers (6 bytes for IPv4, 18 for IPv6)
 		if (len(peers4)/6 + len(peers6)/18) >= numWant {
 			break
 		}
+
 		if ip4 := p.IP.To4(); ip4 != nil {
 			peers4 = append(peers4, ip4...)
 			peers4 = binary.BigEndian.AppendUint16(peers4, p.Port)
@@ -114,20 +127,18 @@ func (t *Torrent) getPeersAndCount(exclude string, numWant int) (peers4, peers6 
 			peers6 = binary.BigEndian.AppendUint16(peers6, p.Port)
 		}
 	}
+
 	return
 }
 
+// parseHash converts various hash formats to a normalized hex string.
 func parseHash(hashParam string) (string, error) {
-	// BitTorrent BEP 3 says info_hash should be URL-encoded in query params.
-	// However, clients vary: some send %12%34... (percent-encoded bytes),
-	// some send raw 20 bytes, and some send 40 hex chars already.
-	// We handle all three formats for maximum compatibility.
-
 	// 40 hex chars = already hex-encoded 20 bytes (no unescaping needed)
 	if decoded, err := hex.DecodeString(hashParam); err == nil && len(decoded) == 20 {
 		return strings.ToLower(hashParam), nil
 	}
 
+	// BitTorrent BEP 3 says info_hash should be URL-encoded in query params.
 	// Try URL unescaping for percent-encoded binary (e.g., %12%34...)
 	if d, err := url.QueryUnescape(hashParam); err == nil {
 		hashParam = d
@@ -137,26 +148,26 @@ func parseHash(hashParam string) (string, error) {
 	if len(hashParam) == 20 {
 		return hex.EncodeToString([]byte(hashParam)), nil
 	}
+
 	return "", fmt.Errorf("invalid hash")
 }
 
+// getIP extracts the client IP from the request, respecting proxy headers.
 func getIP(r *http.Request) net.IP {
-	// Get the direct connection IP first
 	host, _, err := net.SplitHostPort(r.RemoteAddr)
 	if err != nil {
 		host = r.RemoteAddr
 	}
 	ip := net.ParseIP(host)
 
-	// Only trust proxy headers if connection is from private network (reverse proxy)
+	// Trust proxy headers only for private network connections
 	if ip != nil && ip.IsPrivate() {
-		// Check X-Real-IP first (some proxies use this)
 		if realIP := r.Header.Get("X-Real-IP"); realIP != "" {
 			if parsed := net.ParseIP(realIP); parsed != nil {
 				return parsed
 			}
 		}
-		// Then check X-Forwarded-For (can be a list, use first = closest proxy)
+
 		if fwd := r.Header.Get("X-Forwarded-For"); fwd != "" {
 			for _, ipStr := range strings.Split(fwd, ",") {
 				if parsed := net.ParseIP(strings.TrimSpace(ipStr)); parsed != nil {
@@ -169,6 +180,7 @@ func getIP(r *http.Request) net.IP {
 	return ip
 }
 
+// announce handles BitTorrent announce requests.
 func (tr *Tracker) announce(w http.ResponseWriter, r *http.Request) {
 	q := r.URL.Query()
 
@@ -199,7 +211,6 @@ func (tr *Tracker) announce(w http.ResponseWriter, r *http.Request) {
 
 	debug("info_hash=%s peer_id=%s", infoHash, peerID)
 
-	// Parse port as unsigned 16-bit int (validates 1-65535 range automatically)
 	port, err := strconv.ParseUint(q.Get("port"), 10, 16)
 	if err != nil || port == 0 {
 		debug("bad port: %q", q.Get("port"))
@@ -209,46 +220,42 @@ func (tr *Tracker) announce(w http.ResponseWriter, r *http.Request) {
 	}
 
 	numWant, _ := strconv.Atoi(q.Get("numwant"))
-	// numWant is how many peers the client wants (0 means default, 50 is our max to prevent DoS)
 	if numWant == 0 || numWant > 50 {
 		numWant = 50
 	}
 	debug("numwant: %d", numWant)
 
-	// Parse bytes remaining: base 10, 64-bit integer. left=0 means peer has complete file (seeder)
 	left, _ := strconv.ParseInt(q.Get("left"), 10, 64)
-
 	torrent := tr.getTorrent(infoHash)
 	clientIP := getIP(r)
+	event := q.Get("event")
 
 	debug("client IP: %s, port: %d, left: %d", clientIP, port, left)
-	debug("torrent has %d peers", len(torrent.Peers))
-	for id, p := range torrent.Peers {
+	debug("torrent has %d peers", len(torrent.peers))
+	for id, p := range torrent.peers {
 		debug("  existing peer: %s @ %s:%d (left: %d)", id, p.IP, p.Port, p.Left)
 	}
+	debug("event=%s", event)
 
-	event := q.Get("event")
-	if event == "stopped" {
-		debug("event=stopped")
+	switch event {
+	case "stopped":
 		torrent.removePeer(peerID)
-	} else {
-		switch event {
-		case "completed":
-			debug("event=completed")
-		case "started":
-			debug("event=started")
-		}
+	case "completed":
+		torrent.addPeer(peerID, clientIP, uint16(port), 0) // Force seeder
+	case "started", "":
+		fallthrough
+	default:
 		torrent.addPeer(peerID, clientIP, uint16(port), left)
 	}
 
 	peers4, peers6, seeders, leechers := torrent.getPeersAndCount(peerID, numWant)
-
-	debug("returning %d seeders, %d leechers, %d peers4 bytes, %d peers6 bytes", seeders, leechers, len(peers4), len(peers6))
+	debug("returning %d seeders, %d leechers, %d peers4 bytes, %d peers6 bytes",
+		seeders, leechers, len(peers4), len(peers6))
 
 	w.Header().Set("Content-Type", "text/plain")
 	bencode.Marshal(w, map[string]any{
-		"interval":     10 * 60, // Minutes to client re-announce
-		"min interval": 3 * 60,  // Minutes between announces
+		"interval":     10 * time.Minute, // client re-announce
+		"min interval": 3 * time.Minute,  // between announces
 		"complete":     seeders,
 		"incomplete":   leechers,
 		"peers":        peers4,
@@ -256,16 +263,19 @@ func (tr *Tracker) announce(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+// cleanupLoop periodically clears inactive torrents every 30 minutes.
 func (tr *Tracker) cleanupLoop() {
-	// Clear all peers every 30 minutes to prevent memory growth and stale connections
-	for range time.Tick(30 * time.Minute) {
+	ticker := time.NewTicker(30 * time.Minute)
+	defer ticker.Stop()
+
+	for range ticker.C {
 		tr.mu.Lock()
 		count := len(tr.torrents)
 		for hash, t := range tr.torrents {
 			t.mu.Lock()
-			peerCount := len(t.Peers)
-			t.Peers = make(map[string]*Peer)
-			t.Seeders, t.Leechers = 0, 0
+			peerCount := len(t.peers)
+			t.peers = make(map[string]*Peer)
+			t.seeders, t.leechers = 0, 0
 			t.mu.Unlock()
 			debug("cleanup: removed torrent %s with %d peers", hash, peerCount)
 			delete(tr.torrents, hash)
@@ -290,7 +300,7 @@ func main() {
 	flag.BoolVar(&debugMode, "debug", debugMode, "enable debug logs")
 	flag.Parse()
 
-	tracker := &Tracker{torrents: map[string]*Torrent{}}
+	tracker := &Tracker{torrents: make(map[string]*Torrent)}
 	go tracker.cleanupLoop()
 
 	http.HandleFunc("/", tracker.announce)
