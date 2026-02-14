@@ -67,23 +67,26 @@ func (t *Torrent) addPeer(id string, ip net.IP, port uint16, left int64) {
 	defer t.mu.Unlock()
 
 	if p, exists := t.peers[id]; exists {
-		if p.Left == 0 {
+		if p.Left == 0 && left > 0 {
 			t.seeders--
-		} else {
+			t.leechers++
+			debug("peer %s became leecher @ %s:%d", id, ip, port)
+		} else if p.Left > 0 && left == 0 {
 			t.leechers--
+			t.seeders++
+			debug("peer %s became seeder @ %s:%d", id, ip, port)
 		}
-		debug("updated peer %s: %s:%d -> %s:%d (left: %d -> %d)",
-			id, p.IP, p.Port, ip, port, p.Left, left)
-	} else {
-		debug("added peer %s @ %s:%d (left: %d)", id, ip, port, left)
+		p.IP, p.Port, p.Left = ip, port, left
+		return
 	}
 
-	t.peers[id] = &Peer{IP: ip, Port: port, Left: left}
 	if left == 0 {
 		t.seeders++
 	} else {
 		t.leechers++
 	}
+	t.peers[id] = &Peer{IP: ip, Port: port, Left: left}
+	debug("added peer %s @ %s:%d", id, ip, port)
 }
 
 // removePeer removes a peer from the torrent.
@@ -91,15 +94,18 @@ func (t *Torrent) removePeer(id string) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 
-	if p, exists := t.peers[id]; exists {
-		if p.Left == 0 {
-			t.seeders--
-		} else {
-			t.leechers--
-		}
-		debug("removed peer %s @ %s:%d", id, p.IP, p.Port)
-		delete(t.peers, id)
+	p, exists := t.peers[id]
+	if !exists {
+		return
 	}
+
+	if p.Left == 0 {
+		t.seeders--
+	} else {
+		t.leechers--
+	}
+	delete(t.peers, id)
+	debug("removed peer %s @ %s:%d", id, p.IP, p.Port)
 }
 
 // getPeersAndCount returns peer lists and counts, excluding the requesting peer.
@@ -127,8 +133,7 @@ func (t *Torrent) getPeersAndCount(exclude string, numWant int) (peers4, peers6 
 			peers6 = binary.BigEndian.AppendUint16(peers6, p.Port)
 		}
 	}
-
-	return
+	return peers4, peers6, seeders, leechers
 }
 
 // parseHash converts various hash formats to a normalized hex string.
@@ -158,6 +163,7 @@ func getIP(r *http.Request) net.IP {
 	if err != nil {
 		host = r.RemoteAddr
 	}
+
 	ip := net.ParseIP(host)
 
 	// Trust proxy headers only for private network connections
@@ -176,7 +182,6 @@ func getIP(r *http.Request) net.IP {
 			}
 		}
 	}
-
 	return ip
 }
 
