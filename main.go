@@ -103,21 +103,25 @@ func (t *Torrent) getPeersAndCount(exclude string, numWant int) (peers4, peers6 
 	return
 }
 
-func parseHash(s string) (string, error) {
+func parseHash(hashParam string) (string, error) {
 	// BitTorrent BEP 3 says info_hash should be URL-encoded in query params.
 	// However, clients vary: some send %12%34... (percent-encoded bytes),
 	// some send raw 20 bytes, and some send 40 hex chars already.
 	// We handle all three formats for maximum compatibility.
-	if d, err := url.QueryUnescape(s); err == nil {
-		s = d
+
+	// 40 hex chars = already hex-encoded 20 bytes (no unescaping needed)
+	if decoded, err := hex.DecodeString(hashParam); err == nil && len(decoded) == 20 {
+		return strings.ToLower(hashParam), nil
 	}
-	// 40 hex chars = already hex-encoded 20 bytes
-	if decoded, err := hex.DecodeString(s); err == nil && len(decoded) == 20 {
-		return strings.ToLower(s), nil
+
+	// Try URL unescaping for percent-encoded binary (e.g., %12%34...)
+	if d, err := url.QueryUnescape(hashParam); err == nil {
+		hashParam = d
 	}
+
 	// 20 raw bytes need hex encoding
-	if len(s) == 20 {
-		return hex.EncodeToString([]byte(s)), nil
+	if len(hashParam) == 20 {
+		return hex.EncodeToString([]byte(hashParam)), nil
 	}
 	return "", fmt.Errorf("invalid hash")
 }
