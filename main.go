@@ -14,9 +14,9 @@ import (
 )
 
 // Protocol constants for the UDP Tracker Protocol (BEP 15)
+// https://bittorrent.org/beps/bep_0015.html
 const (
-	// This is a fixed "magic number" that all BitTorrent UDP trackers use
-	// Clients must send this in their first "connect" request to prove they speak the protocol
+	// This is a fixed "magic constant" identifier
 	protocolID = 0x41727101980
 
 	// Action codes tell the tracker what the client wants to do
@@ -236,8 +236,11 @@ func (tr *Tracker) handleAnnounce(conn *net.UDPConn, addr *net.UDPAddr, packet [
 	debug("announce from %s: info_hash=%s peer_id=%s event=%d left=%d port=%d num_want=%d ip=%s",
 		addr, infoHash, peerID, event, left, port, numWant, clientIP)
 
-	// If client doesn't specify how many peers they want, default to 50 (reasonable amount)
-	if numWant == 0 || numWant > 50 {
+	// num_want=-1 means "default" (0xFFFFFFFF as uint32)
+	// num_want=0 means "not specified"
+	// Both cases should use the tracker's default of 50 peers.
+	// Also clamp anything above 50 to prevent excessive responses.
+	if numWant == 0 || numWant == 0xFFFFFFFF || numWant > 50 {
 		numWant = 50
 	}
 
@@ -261,7 +264,7 @@ func (tr *Tracker) handleAnnounce(conn *net.UDPConn, addr *net.UDPAddr, packet [
 	// Get lists of IPv4 and IPv6 peers.
 	peers4, peers6, seeders, leechers := torrent.getPeersAndCount(peerID, int(numWant))
 
-	// BEP 15: Return peers matching the client's IP type
+	// Return peers matching the client's IP type
 	// IPv4 clients get IPv4 peers (6 bytes each), IPv6 clients get IPv6 peers (18 bytes each)
 	var peers []byte
 	if addr.IP.To4() != nil {
