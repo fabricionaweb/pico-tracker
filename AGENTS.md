@@ -136,7 +136,7 @@
 - Check for untracked files
 - Verify no secrets before committing
 - Use conventional commit format: `<type>: <description>` (e.g., `feat:`, `fix:`, `refactor:`, `docs:`, `chore:`)
-- **REQUIRED**: Use `--trailer 'Co-authored-by: Kimi 2.5 <kimi@moonshot.cn>'`
+- **REQUIRED**: Use `--trailer 'Co-authored-by: <AI-Model-Name> <<model-contact>>'` (substitute with current AI model name)
 
 ---
 
