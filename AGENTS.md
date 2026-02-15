@@ -1,12 +1,5 @@
 # Agent Instructions
 
-## Required Commit Format
-
-**All commits MUST include:**
-```
---trailer 'Co-authored-by: Kimi 2.5 <kimi@moonshot.cn>'
-```
-
 ## Code Style & Conventions
 
 ### General Principles
