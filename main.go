@@ -31,7 +31,7 @@ const (
 	eventStarted   = 2
 	eventStopped   = 3
 
-	// The standard MTU size for Ethernet (1500 bytes)
+	// Buffer size for reading UDP packets (1500 bytes handles typical unfragmented Ethernet frames)
 	maxPacketSize = 1500
 
 	// How long clients should wait before re-announcing (in seconds)
