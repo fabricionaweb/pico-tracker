@@ -57,8 +57,8 @@ type Peer struct {
 type Torrent struct {
 	mu       sync.RWMutex
 	peers    map[string]*Peer // key is peer_id (unique identifier for each BitTorrent client)
-	seeders  int              // many people have the complete file
-	leechers int              // many people are still downloading
+	seeders  int              // how many people have the complete file
+	leechers int              // how many people are still downloading
 }
 
 // Tracker manages multiple torrents (different files being shared)
@@ -222,10 +222,12 @@ func (tr *Tracker) handleAnnounce(conn *net.UDPConn, addr *net.UDPAddr, packet [
 	numWant := binary.BigEndian.Uint32(packet[92:96]) // How many peers they want (max 50)
 	port := binary.BigEndian.Uint16(packet[96:98])    // Port where they accept connections
 
-	// Determine client's IP: use packet source IP by default, or custom IP if provided (rare, for proxies/NAT)
+	// Determine client's IP: use packet source IP by default
+	// IPv4 clients can specify a custom IP (rare, for proxies/NAT)
+	// IPv6 clients must use 0 for IP field - the 32-bit field can't hold a 128-bit address
 	clientIP := addr.IP
-	if ipAddr != 0 {
-		// Client specified their own IP - convert 32-bit integer to dotted notation
+	if ipAddr != 0 && addr.IP.To4() != nil {
+		// IPv4 client specified their own IP - convert 32-bit integer to dotted notation
 		clientIP = net.ParseIP(fmt.Sprintf("%d.%d.%d.%d",
 			byte(ipAddr>>24), byte(ipAddr>>16), byte(ipAddr>>8), byte(ipAddr)))
 	}
