@@ -46,6 +46,10 @@ func debug(format string, v ...any) {
 	}
 }
 
+func info(format string, v ...any) {
+	log.Printf("[INFO] "+format, v...)
+}
+
 // Peer represents someone downloading or seeding a torrent
 type Peer struct {
 	IP   net.IP
@@ -74,7 +78,7 @@ func (t *Tracker) getTorrent(hash string) *Torrent {
 
 	if _, ok := t.torrents[hash]; !ok {
 		t.torrents[hash] = &Torrent{peers: make(map[string]*Peer)}
-		debug("created new torrent %s", hash)
+		info("created new torrent %s", hash)
 	}
 
 	return t.torrents[hash]
@@ -107,7 +111,7 @@ func (t *Torrent) addPeer(id string, ip net.IP, port uint16, left int64) {
 		t.leechers++
 	}
 	t.peers[id] = &Peer{IP: ip, Port: port, Left: left}
-	debug("added peer %s @ %s:%d", id, ip, port)
+	info("added peer %s @ %s:%d", id, ip, port)
 }
 
 // removePeer removes a peer when they disconnect (eventStopped)
@@ -127,7 +131,7 @@ func (t *Torrent) removePeer(id string) {
 		t.leechers--
 	}
 	delete(t.peers, id)
-	debug("removed peer %s @ %s:%d", id, p.IP, p.Port)
+	info("removed peer %s @ %s:%d", id, p.IP, p.Port)
 }
 
 // getPeersAndCount returns IPv4 and IPv6 peer lists for clients to connect to
@@ -188,7 +192,7 @@ func (tr *Tracker) handleConnect(conn *net.UDPConn, addr *net.UDPAddr, transacti
 	binary.BigEndian.PutUint64(response[8:16], connectionID)
 
 	if _, err := conn.WriteToUDP(response, addr); err != nil {
-		debug("failed to send connect response to %s: %v", addr, err)
+		info("failed to send connect response to %s: %v", addr, err)
 	} else {
 		debug("sent connect response with connection_id=%d", connectionID)
 	}
@@ -293,7 +297,7 @@ func (tr *Tracker) handleAnnounce(conn *net.UDPConn, addr *net.UDPAddr, packet [
 	copy(response[20:], peers)
 
 	if _, err := conn.WriteToUDP(response, addr); err != nil {
-		debug("failed to send announce response to %s: %v", addr, err)
+		info("failed to send announce response to %s: %v", addr, err)
 	}
 }
 
@@ -342,7 +346,7 @@ func (tr *Tracker) handleScrape(conn *net.UDPConn, addr *net.UDPAddr, packet []b
 	}
 
 	if _, err := conn.WriteToUDP(response, addr); err != nil {
-		debug("failed to send scrape response to %s: %v", addr, err)
+		info("failed to send scrape response to %s: %v", addr, err)
 	}
 }
 
@@ -358,7 +362,7 @@ func (tr *Tracker) sendError(conn *net.UDPConn, addr *net.UDPAddr, transactionID
 	// Bytes 8+: error_message (variable) - human-readable error description
 	copy(response[8:], message)
 	if _, err := conn.WriteToUDP(response, addr); err != nil {
-		debug("failed to send error to %s: %v", addr, err)
+		info("failed to send error to %s: %v", addr, err)
 	} else {
 		debug("sent error to %s: %s", addr, message)
 	}
@@ -433,7 +437,7 @@ func (tr *Tracker) cleanupLoop() {
 		}
 		tr.mu.Unlock()
 		if removedCount > 0 {
-			debug("cleanup: removed %d inactive torrents", removedCount)
+			info("cleanup: removed %d inactive torrents", removedCount)
 		}
 	}
 }
@@ -462,7 +466,7 @@ func main() {
 		log.Fatalf("[ERROR] Failed to listen on IPv4: %v", err)
 	}
 	defer conn4.Close()
-	log.Printf("[INFO] UDP Tracker listening on 0.0.0.0:%d (IPv4)", *port)
+	info("UDP Tracker listening on 0.0.0.0:%d (IPv4)", *port)
 
 	// Listen on IPv6 ([::] means all IPv6 interfaces)
 	// IPv6 is optional - if it fails, the tracker still works with IPv4 only
@@ -471,7 +475,7 @@ func main() {
 		log.Printf("[WARN] IPv6 not available: %v", err)
 	} else {
 		defer conn6.Close()
-		log.Printf("[INFO] UDP Tracker listening on [::]:%d (IPv6)", *port)
+		info("UDP Tracker listening on [::]:%d (IPv6)", *port)
 	}
 
 	go tracker.listen(conn4)
