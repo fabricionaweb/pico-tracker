@@ -130,12 +130,12 @@ func (t *Torrent) removePeer(id string) {
 	debug("removed peer %s @ %s:%d", id, p.IP, p.Port)
 }
 
-// getPeersAndCount returns a list of other peers for the client to connect to
-// We return up to numWant peers, not including the requesting peer
+// getPeersAndCount returns IPv4 and IPv6 peer lists for clients to connect to
+// Returns up to numWant peers of each address family (not including requesting peer)
 // The returned data is packed as:
 //
-//	[4 bytes IP][2 bytes port] for IPv4,
-//	[16 bytes IP][2 bytes port] for IPv6
+//	[4 bytes IP][2 bytes port] for IPv4 (6 bytes per peer)
+//	[16 bytes IP][2 bytes port] for IPv6 (18 bytes per peer)
 func (t *Torrent) getPeersAndCount(exclude string, numWant int) (peers4, peers6 []byte, seeders, leechers int) {
 	t.mu.RLock()
 	defer t.mu.RUnlock()
@@ -148,19 +148,17 @@ func (t *Torrent) getPeersAndCount(exclude string, numWant int) (peers4, peers6 
 			continue
 		}
 
-		// Stop when we have enough peers (IPv4 = 6 bytes, IPv6 = 18 bytes per peer)
-		// Count total peers across both address families and stop at the requested limit
-		if (len(peers4)/6 + len(peers6)/18) >= numWant {
-			break
-		}
-
-		// Pack IP and port into binary format that BitTorrent clients expect
+		// Add peer to appropriate list if we haven't reached numWant yet
 		if ip4 := p.IP.To4(); ip4 != nil {
-			peers4 = append(peers4, ip4...)
-			peers4 = binary.BigEndian.AppendUint16(peers4, p.Port)
+			if len(peers4)/6 < numWant {
+				peers4 = append(peers4, ip4...)
+				peers4 = binary.BigEndian.AppendUint16(peers4, p.Port)
+			}
 		} else {
-			peers6 = append(peers6, p.IP.To16()...)
-			peers6 = binary.BigEndian.AppendUint16(peers6, p.Port)
+			if len(peers6)/18 < numWant {
+				peers6 = append(peers6, p.IP.To16()...)
+				peers6 = binary.BigEndian.AppendUint16(peers6, p.Port)
+			}
 		}
 	}
 
