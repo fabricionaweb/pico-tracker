@@ -414,25 +414,27 @@ func (tr *Tracker) handlePacket(conn *net.UDPConn, addr *net.UDPAddr, packet []b
 	}
 }
 
-// cleanupLoop runs periodically to remove inactive torrents and free memory
-// In a production tracker, you'd want to be smarter about this and only
-// remove torrents with no active peers, not just clear everything
+// cleanupLoop runs periodically to remove inactive torrents (those with no peers)
+// Only torrents with zero peers are removed
 func (tr *Tracker) cleanupLoop() {
 	ticker := time.NewTicker(30 * time.Minute)
 	defer ticker.Stop()
 
 	for range ticker.C {
 		tr.mu.Lock()
-		count := len(tr.torrents)
+		removedCount := 0
 		for hash, t := range tr.torrents {
-			// Just read peer count for logging before deleting
-			// No need to clear fields - the whole struct gets garbage collected
-			peerCount := len(t.peers)
-			debug("cleanup: removed torrent %s with %d peers", hash, peerCount)
-			delete(tr.torrents, hash)
+			// Only remove torrents with no active peers
+			if len(t.peers) == 0 {
+				delete(tr.torrents, hash)
+				removedCount++
+				debug("cleanup: removed inactive torrent %s", hash)
+			}
 		}
 		tr.mu.Unlock()
-		debug("cleanup: cleared %d torrents", count)
+		if removedCount > 0 {
+			debug("cleanup: removed %d inactive torrents", removedCount)
+		}
 	}
 }
 
