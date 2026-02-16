@@ -8,17 +8,6 @@
 - **Direct answers**: Answer questions directly without elaboration unless asked
 - **Follow existing patterns**: Mimic code style, use existing libraries, follow conventions
 
-### Language-Specific Guidelines
-
-#### Go
-- No unnecessary comments
-- No trailing periods on comments
-- Trust initialization patterns (e.g., maps created by constructors)
-- Use `go vet`, `gofmt`, and `staticcheck`
-- Keep methods focused and minimal
-- Follows best go practices
-- Remove not used dependencies, parameters and variables
-
 ## Tool Usage
 
 ### When to Use Each Tool
@@ -60,27 +49,6 @@
 - Don't surprise user with unexpected actions
 - Ask before committing or pushing
 
-## Workflows
-
-### Making Changes
-1. Read relevant files
-2. Understand existing patterns
-3. Make minimal, focused edits
-4. Verify with tests/linting
-5. Confirm with user
-
-### Debugging
-1. Read error messages carefully
-2. Check related files
-3. Look for pattern mismatches
-4. Test incrementally
-
-### Code Review
-- Check for security issues
-- Verify no secrets exposed
-- Ensure following conventions
-- Test if possible
-
 ## Security
 
 ### Never
@@ -93,18 +61,6 @@
 - Check files for malicious content
 - Follow security best practices
 - Protect user data
-
-## Verification
-
-### Before Completing
-- [ ] Code compiles/builds
-- [ ] Tests pass (if applicable)
-- [ ] Linting passes
-- [ ] No secrets in files
-- [ ] Follows project conventions
-
-### Commands to Run
-- Go: `go build`, `go vet`, `gofmt`
 
 ## Anti-Patterns
 
