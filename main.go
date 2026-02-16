@@ -44,8 +44,8 @@ const (
 	cleanupInterval    = 30 // (minutes) to remove stale peers and inactive torrents
 	stalePeerThreshold = 60 // (minutes) allows one missed announce
 
-	rateLimitBurst  = 10              // max connect requests per rateLimitWindow
-	rateLimitWindow = 2 * time.Minute // window duration for rate limiting
+	rateLimitWindow = 2  // (minutes) window duration for rate limiting
+	rateLimitBurst  = 10 // max connect requests per rateLimitWindow
 )
 
 var secretKey [32]byte // secret for syn-cookie connection ID signing (prevents IP spoofing)
@@ -113,6 +113,7 @@ func (h HashID) String() string {
 // Returns (allowed, timeRemaining) - timeRemaining is 0 if allowed
 func (tr *Tracker) checkRateLimit(addr *net.UDPAddr) (allowed bool, timeRemaining time.Duration) {
 	key := addr.String()
+	window := rateLimitWindow * time.Minute
 
 	tr.rateLimiterMu.Lock()
 	defer tr.rateLimiterMu.Unlock()
@@ -125,7 +126,7 @@ func (tr *Tracker) checkRateLimit(addr *net.UDPAddr) (allowed bool, timeRemainin
 	}
 
 	elapsed := time.Since(rl.windowStart)
-	if elapsed >= rateLimitWindow {
+	if elapsed >= window {
 		rl.count = 1
 		rl.windowStart = time.Now()
 		return true, 0
@@ -136,7 +137,7 @@ func (tr *Tracker) checkRateLimit(addr *net.UDPAddr) (allowed bool, timeRemainin
 		return true, 0
 	}
 
-	return false, rateLimitWindow - elapsed
+	return false, window - elapsed
 }
 
 func (t *Tracker) getOrCreateTorrent(hash HashID) *Torrent {
@@ -300,9 +301,9 @@ func generateConnectionID(addr *net.UDPAddr) uint64 {
 // validateConnectionID verifies the syn-cookie signature and checks expiration
 func validateConnectionID(id uint64, addr *net.UDPAddr) bool {
 	timestamp := uint32(id >> 32)
+	expiration := 2 * time.Minute // 2 minutes per BEP 15
 
-	// expiration 2 minutes per BEP 15
-	if time.Since(time.Unix(int64(timestamp), 0)) > 2*time.Minute {
+	if time.Since(time.Unix(int64(timestamp), 0)) > expiration {
 		return false
 	}
 
@@ -510,15 +511,18 @@ func (tr *Tracker) handlePacket(ctx context.Context, conn *net.UDPConn, addr *ne
 	}
 }
 
-// cleanupLoop periodically removes peers that haven't announced recently
-// and deletes torrents that become empty
+// cleanupLoop periodically removes peers that haven't announced recently,
+// deletes torrents that become empty, and cleans up stale rate limiter entries
 func (tr *Tracker) cleanupLoop() {
 	ticker := time.NewTicker(cleanupInterval * time.Minute)
 	defer ticker.Stop()
 
 	staleThreshold := stalePeerThreshold * time.Minute
+	rateLimitStaleThreshold := rateLimitWindow * 2 * time.Minute // 2 windows are definitely stale
+	var rateLimitStaleDeadline time.Time
 
 	for range ticker.C {
+		// clean peers and torrents
 		staleDeadline := time.Now().Add(-staleThreshold)
 		tr.mu.Lock()
 		removedTorrents := 0
@@ -550,8 +554,21 @@ func (tr *Tracker) cleanupLoop() {
 		}
 		tr.mu.Unlock()
 
-		if removedPeers > 0 || removedTorrents > 0 {
-			info("cleanup: removed %d stale peers and %d inactive torrents", removedPeers, removedTorrents)
+		// clean rate limiter
+		tr.rateLimiterMu.Lock()
+		rateLimitStaleDeadline = time.Now().Add(-rateLimitStaleThreshold)
+		removedRateLimits := 0
+		for key, rl := range tr.rateLimiter {
+			if rl.windowStart.Before(rateLimitStaleDeadline) {
+				delete(tr.rateLimiter, key)
+				removedRateLimits++
+			}
+		}
+		tr.rateLimiterMu.Unlock()
+
+		if removedPeers > 0 || removedTorrents > 0 || removedRateLimits > 0 {
+			info("cleanup: removed %d stale peers, %d inactive torrents, %d rate limit entries",
+				removedPeers, removedTorrents, removedRateLimits)
 		}
 	}
 }
