@@ -86,6 +86,15 @@ Following BEP 15 specification:
 - IPv6 clients receive IPv6 peers (18 bytes: 16 IP + 2 port)
 - Both peer types are tracked and stored regardless of client type
 
+### BEP 15 Compliance
+
+This tracker fully implements the UDP Tracker Protocol security requirements:
+
+- **Connection ID validation** - All announce and scrape requests are validated against cryptographically generated connection IDs
+- **Connection expiration** - Connection IDs expire after 2 minutes (per BEP 15 specification)
+- **Port validation** - Rejects invalid port 0 to prevent malformed peer entries
+- **IP consistency** - Client IP is correctly propagated through all request handlers
+
 ## AI Collaboration
 
 This project was developed using **Kimi 2.5** (AI agent) through iterative refinement, focusing on:
