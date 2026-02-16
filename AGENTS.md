@@ -94,6 +94,12 @@
 - Use conventional commit format: `<type>: <description>` (e.g., `feat:`, `fix:`, `refactor:`, `docs:`, `chore:`)
 - **REQUIRED**: Use `--trailer 'Co-authored-by: <AI-Model-Name> <<model-contact>>'` (substitute with current AI model name)
 
+## Skills
+
+### Always Parse
+- **ALWAYS read `SKILLS.md`** at the start of each session to load domain-specific instructions and workflows
+- Use the `read` tool to load SKILLS.md (it is a regular file, not a registered skill)
+
 ---
 
 *This file should be updated as new patterns and best practices are learned.*
