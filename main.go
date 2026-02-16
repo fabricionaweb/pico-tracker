@@ -35,7 +35,9 @@ const (
 	maxPeersPerPacketV6 = 82   // IPv6: 82 * 18 peers = 1496 bytes (under 1500 MTU)
 	defaultNumWant      = 50   // default number of peers to return when client doesn't specify
 
-	announceInterval = 600 // seconds between announces
+	announceInterval   = 10 // (minutes) between reannounces
+	cleanupInterval    = 30 // (minutes) to remove stale peers and inactive torrents
+	stalePeerThreshold = 60 // (minutes) allows one missed announce
 )
 
 var debugMode = os.Getenv("DEBUG") != ""
@@ -51,10 +53,11 @@ func info(format string, v ...any) {
 }
 
 type Peer struct {
-	IP        net.IP
-	Port      uint16
-	Left      int64 // 0 = seeder, >0 = leecher
-	Completed bool  // true if peer has completed this torrent
+	IP            net.IP
+	Port          uint16
+	Left          int64     // 0 = seeder, >0 = leecher
+	Completed     bool      // true if peer has completed this torrent
+	LastAnnounced time.Time // last time this peer announced (for stale cleanup)
 }
 
 type Torrent struct {
@@ -108,10 +111,11 @@ func (t *Torrent) addPeer(id string, ip net.IP, port uint16, left int64) {
 			}
 		}
 		p.IP, p.Port, p.Left = ip, port, left
+		p.LastAnnounced = time.Now()
 		return
 	}
 
-	peer := &Peer{IP: ip, Port: port, Left: left}
+	peer := &Peer{IP: ip, Port: port, Left: left, LastAnnounced: time.Now()}
 	if left == 0 {
 		t.seeders++
 		peer.Completed = true
@@ -145,6 +149,7 @@ func (t *Torrent) removePeer(id string) {
 // getPeers returns a list of peers for a client to connect to
 // Returns up to numWant peers matching the client's IP version (not including requesting peer)
 // The returned data is packed as:
+//
 //	[4 bytes IP][2 bytes port] for IPv4 (6 bytes per peer)
 //	[16 bytes IP][2 bytes port] for IPv6 (18 bytes per peer)
 func (t *Torrent) getPeers(exclude string, numWant int, clientIP net.IP) (peers []byte, seeders, leechers int) {
@@ -279,7 +284,7 @@ func (tr *Tracker) handleAnnounce(conn *net.UDPConn, addr *net.UDPAddr, packet [
 	response := make([]byte, 20+len(peers))
 	binary.BigEndian.PutUint32(response[0:4], actionAnnounce)
 	binary.BigEndian.PutUint32(response[4:8], transactionID)
-	binary.BigEndian.PutUint32(response[8:12], announceInterval)
+	binary.BigEndian.PutUint32(response[8:12], uint32(time.Duration(announceInterval)*time.Minute/time.Second)) // convert minutes to seconds
 	binary.BigEndian.PutUint32(response[12:16], uint32(leechers))
 	binary.BigEndian.PutUint32(response[16:20], uint32(seeders))
 	copy(response[20:], peers)
@@ -385,24 +390,48 @@ func (tr *Tracker) handlePacket(conn *net.UDPConn, addr *net.UDPAddr, packet []b
 	}
 }
 
-// cleanupLoop runs periodically to remove inactive torrents (those with no peers)
+// cleanupLoop periodically removes peers that haven't announced recently and
+// deletes torrents that become empty
 func (tr *Tracker) cleanupLoop() {
-	ticker := time.NewTicker(30 * time.Minute)
+	ticker := time.NewTicker(cleanupInterval * time.Minute)
 	defer ticker.Stop()
 
+	staleThreshold := stalePeerThreshold * time.Minute
+
 	for range ticker.C {
+		staleDeadline := time.Now().Add(-staleThreshold)
 		tr.mu.Lock()
-		removedCount := 0
+		removedTorrents := 0
+		removedPeers := 0
+
 		for hash, t := range tr.torrents {
+			t.mu.Lock()
+
+			for id, p := range t.peers {
+				if p.LastAnnounced.Before(staleDeadline) {
+					if p.Left == 0 {
+						t.seeders--
+					} else {
+						t.leechers--
+					}
+					delete(t.peers, id)
+					removedPeers++
+					debug("cleanup: removed stale peer %s @ %s:%d (last seen %s ago)",
+						id, p.IP, p.Port, time.Since(p.LastAnnounced).Round(time.Minute))
+				}
+			}
+
 			if len(t.peers) == 0 {
 				delete(tr.torrents, hash)
-				removedCount++
+				removedTorrents++
 				debug("cleanup: removed inactive torrent %s", hash)
 			}
+			t.mu.Unlock()
 		}
 		tr.mu.Unlock()
-		if removedCount > 0 {
-			info("cleanup: removed %d inactive torrents", removedCount)
+
+		if removedPeers > 0 || removedTorrents > 0 {
+			info("cleanup: removed %d stale peers and %d inactive torrents", removedPeers, removedTorrents)
 		}
 	}
 }
