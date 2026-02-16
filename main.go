@@ -55,7 +55,7 @@ func info(format string, v ...any) {
 type Peer struct {
 	IP            net.IP
 	Port          uint16
-	Left          int64     // 0 = seeder, >0 = leecher
+	Left          uint64    // 0 = seeder, >0 = leecher
 	Completed     bool      // true if peer has completed this torrent
 	LastAnnounced time.Time // last time this peer announced (for stale cleanup)
 }
@@ -92,7 +92,7 @@ func (t *Tracker) getTorrent(hash string) *Torrent {
 	return t.torrents[hash]
 }
 
-func (t *Torrent) addPeer(id string, ip net.IP, port uint16, left int64) {
+func (t *Torrent) addPeer(id string, ip net.IP, port uint16, left uint64) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 
@@ -272,7 +272,7 @@ func (tr *Tracker) handleAnnounce(conn *net.UDPConn, addr *net.UDPAddr, packet [
 	case eventStarted, eventNone:
 		fallthrough
 	default:
-		torrent.addPeer(peerID, clientIP, port, int64(left))
+		torrent.addPeer(peerID, clientIP, port, left)
 	}
 
 	peers, seeders, leechers := torrent.getPeers(peerID, numWant, addr.IP)
