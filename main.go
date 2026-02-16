@@ -30,8 +30,12 @@ const (
 	eventStarted   = 2
 	eventStopped   = 3
 
-	maxPacketSize    = 1500 // typical unfragmented Ethernet frame
-	announceInterval = 600  // seconds between announces
+	maxPacketSize       = 1500 // typical unfragmented Ethernet frame (MTU)
+	maxPeersPerPacketV4 = 200  // IPv4: 200 * 6 peers = 1220 bytes (under 1500 MTU)
+	maxPeersPerPacketV6 = 82   // IPv6: 82 * 18 peers = 1496 bytes (under 1500 MTU)
+	defaultNumWant      = 50   // default number of peers to return when client doesn't specify
+
+	announceInterval = 600 // seconds between announces
 )
 
 var debugMode = os.Getenv("DEBUG") != ""
@@ -121,36 +125,45 @@ func (t *Torrent) removePeer(id string) {
 	info("removed peer %s @ %s:%d", id, p.IP, p.Port)
 }
 
-// getPeersAndCount returns IPv4 and IPv6 peer lists for clients to connect to
-// Returns up to numWant peers of each address family (not including requesting peer)
+// getPeers returns a list of peers for a client to connect to
+// Returns up to numWant peers matching the client's IP version (not including requesting peer)
 // The returned data is packed as:
 //	[4 bytes IP][2 bytes port] for IPv4 (6 bytes per peer)
 //	[16 bytes IP][2 bytes port] for IPv6 (18 bytes per peer)
-func (t *Torrent) getPeersAndCount(exclude string, numWant int) (peers4, peers6 []byte, seeders, leechers int) {
+func (t *Torrent) getPeers(exclude string, numWant int, clientIP net.IP) (peers []byte, seeders, leechers int) {
 	t.mu.RLock()
 	defer t.mu.RUnlock()
 
 	seeders, leechers = t.seeders, t.leechers
+	wantV4Peers := clientIP.To4() != nil
+	peerSize := 6 // IPv4 peer size
+	if !wantV4Peers {
+		peerSize = 18 // IPv6 peer size
+	}
 
 	for id, p := range t.peers {
 		if id == exclude {
 			continue
 		}
 
-		if ip4 := p.IP.To4(); ip4 != nil {
-			if len(peers4)/6 < numWant {
-				peers4 = append(peers4, ip4...)
-				peers4 = binary.BigEndian.AppendUint16(peers4, p.Port)
-			}
-		} else {
-			if len(peers6)/18 < numWant {
-				peers6 = append(peers6, p.IP.To16()...)
-				peers6 = binary.BigEndian.AppendUint16(peers6, p.Port)
-			}
+		isV4Peer := p.IP.To4() != nil
+		if isV4Peer != wantV4Peers {
+			continue
 		}
+
+		if len(peers)/peerSize >= numWant {
+			break
+		}
+
+		if wantV4Peers {
+			peers = append(peers, p.IP.To4()...)
+		} else {
+			peers = append(peers, p.IP.To16()...)
+		}
+		peers = binary.BigEndian.AppendUint16(peers, p.Port)
 	}
 
-	return peers4, peers6, seeders, leechers
+	return peers, seeders, leechers
 }
 
 // handleConnect is the first step in UDP tracker communication
@@ -180,8 +193,9 @@ func (tr *Tracker) handleConnect(conn *net.UDPConn, addr *net.UDPAddr, transacti
 // handleAnnounce is the main interaction - a client tells us they're downloading
 // and asks for a list of other people to connect to
 // Announce request format:
-//	[connection_id:8] [action:4] [transaction_id:4] [info_hash:20] [peer_id:20]
-//	[downloaded:8] [left:8] [uploaded:8] [event:4] [IP:4] [key:4] [num_want:4] [port:2]
+//
+//	[connection_id:8][action:4][transaction_id:4][info_hash:20][peer_id:20]
+//	[downloaded:8][left:8][uploaded:8][event:4][IP:4][key:4][num_want:4][port:2]
 func (tr *Tracker) handleAnnounce(conn *net.UDPConn, addr *net.UDPAddr, packet []byte, transactionID uint32) {
 	if len(packet) < 98 {
 		debug("announce request too short from %s", addr)
@@ -196,23 +210,35 @@ func (tr *Tracker) handleAnnounce(conn *net.UDPConn, addr *net.UDPAddr, packet [
 	// Skip uploaded (8 bytes)
 	event := binary.BigEndian.Uint32(packet[80:84])
 	ipAddr := binary.BigEndian.Uint32(packet[84:88])
-	numWant := binary.BigEndian.Uint32(packet[92:96])
+	numWantRaw := binary.BigEndian.Uint32(packet[92:96])
 	port := binary.BigEndian.Uint16(packet[96:98])
+
+	clientIsV4 := addr.IP.To4() != nil
+	maxWant := maxPeersPerPacketV4
+	peerSize := 6 // IPv4 peer size
+	if !clientIsV4 {
+		maxWant = maxPeersPerPacketV6
+		peerSize = 18 // IPv6 peer size
+	}
+	numWant := defaultNumWant
+	// num_want 0 or 0xFFFFFFFF (-1 but we have it unsigned 32bit) means "default"
+	if numWantRaw != 0 && numWantRaw != 0xFFFFFFFF {
+		if numWantRaw > uint32(maxWant) {
+			numWant = maxWant
+		} else {
+			numWant = int(numWantRaw)
+		}
+	}
 
 	// Determine client's IP: use packet source by default, but IPv4 clients can specify a custom IP
 	clientIP := addr.IP
-	if ipAddr != 0 && addr.IP.To4() != nil {
+	if ipAddr != 0 && clientIsV4 {
 		clientIP = net.ParseIP(fmt.Sprintf("%d.%d.%d.%d",
 			byte(ipAddr>>24), byte(ipAddr>>16), byte(ipAddr>>8), byte(ipAddr)))
 	}
 
 	debug("announce from %s: info_hash=%s peer_id=%s event=%d left=%d port=%d num_want=%d ip=%s",
 		addr, infoHash, peerID, event, left, port, numWant, clientIP)
-
-	// num_want 0 and 0xFFFFFFFF (-1) means "default", max is 50
-	if numWant == 0 || numWant == 0xFFFFFFFF || numWant > 50 {
-		numWant = 50
-	}
 
 	torrent := tr.getTorrent(infoHash)
 
@@ -227,16 +253,9 @@ func (tr *Tracker) handleAnnounce(conn *net.UDPConn, addr *net.UDPAddr, packet [
 		torrent.addPeer(peerID, clientIP, port, int64(left))
 	}
 
-	peers4, peers6, seeders, leechers := torrent.getPeersAndCount(peerID, int(numWant))
-
-	var peers []byte
-	if addr.IP.To4() != nil {
-		peers = peers4
-		debug("returning %d seeders, %d leechers, %d IPv4 peers", seeders, leechers, len(peers4)/6)
-	} else {
-		peers = peers6
-		debug("returning %d seeders, %d leechers, %d IPv6 peers", seeders, leechers, len(peers6)/18)
-	}
+	peers, seeders, leechers := torrent.getPeers(peerID, numWant, addr.IP)
+	peerCount := len(peers) / peerSize
+	debug("returning %d seeders, %d leechers, %d peers", seeders, leechers, peerCount)
 
 	// Announce response format: [action:4][transaction_id:4][interval:4][leechers:4][seeders:4][peers:variable]
 	// Fixed header: 4 + 4 + 4 + 4 + 4 = 20 bytes
