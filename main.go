@@ -62,6 +62,10 @@ func info(format string, v ...any) {
 	log.Printf("[INFO] "+format, v...)
 }
 
+// HashID represents a 20-byte identifier (info_hash or peer_id)
+// Used as map keys to avoid 40-byte hex string overhead (saves 20 bytes per key)
+type HashID [20]byte
+
 type Peer struct {
 	IP            net.IP
 	Port          uint16
@@ -72,7 +76,7 @@ type Peer struct {
 
 type Torrent struct {
 	mu        sync.RWMutex
-	peers     map[string]*Peer // key is peer_id
+	peers     map[HashID]*Peer // key is peer_id
 	seeders   int
 	leechers  int
 	completed int // total completions (peers who finished downloading)
@@ -80,7 +84,7 @@ type Torrent struct {
 
 type Tracker struct {
 	mu       sync.RWMutex
-	torrents map[string]*Torrent // key is info_hash
+	torrents map[HashID]*Torrent // key is info_hash
 	wg       sync.WaitGroup      // tracks in-flight request handlers
 
 	// Rate limiting for connect requests (per IP:Port)
@@ -91,6 +95,17 @@ type Tracker struct {
 type rateLimitEntry struct {
 	count       int       // requests in current window
 	windowStart time.Time // start of current 2-minute window
+}
+
+// Caller must ensure b has at least 20 bytes (packet validation happens before this)
+func NewHashID(b []byte) HashID {
+	var h HashID
+	copy(h[:], b)
+	return h
+}
+
+func (h HashID) String() string {
+	return hex.EncodeToString(h[:])
 }
 
 // checkRateLimit checks if an IP:Port is allowed to make a connect request
@@ -124,26 +139,26 @@ func (tr *Tracker) checkRateLimit(addr *net.UDPAddr) (allowed bool, timeRemainin
 	return false, rateLimitWindow - elapsed
 }
 
-func (t *Tracker) getOrCreateTorrent(hash string) *Torrent {
+func (t *Tracker) getOrCreateTorrent(hash HashID) *Torrent {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 
 	if _, ok := t.torrents[hash]; !ok {
-		t.torrents[hash] = &Torrent{peers: make(map[string]*Peer)}
-		info("created new torrent %s", hash)
+		t.torrents[hash] = &Torrent{peers: make(map[HashID]*Peer)}
+		info("created new torrent %s", hash.String())
 	}
 
 	return t.torrents[hash]
 }
 
-func (t *Tracker) getTorrent(hash string) *Torrent {
+func (t *Tracker) getTorrent(hash HashID) *Torrent {
 	t.mu.RLock()
 	defer t.mu.RUnlock()
 
 	return t.torrents[hash]
 }
 
-func (t *Torrent) addPeer(id string, ip net.IP, port uint16, left uint64) {
+func (t *Torrent) addPeer(id HashID, ip net.IP, port uint16, left uint64) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 
@@ -151,14 +166,14 @@ func (t *Torrent) addPeer(id string, ip net.IP, port uint16, left uint64) {
 		if p.Left == 0 && left > 0 {
 			t.seeders--
 			t.leechers++
-			debug("peer %s became leecher @ %s:%d", id, ip, port)
+			debug("peer %s became leecher @ %s:%d", id.String(), ip, port)
 		} else if p.Left > 0 && left == 0 {
 			t.leechers--
 			t.seeders++
 			if !p.Completed {
 				p.Completed = true
 				t.completed++
-				debug("peer %s completed torrent @ %s:%d", id, ip, port)
+				debug("peer %s completed torrent @ %s:%d", id.String(), ip, port)
 			}
 		}
 		p.IP, p.Port, p.Left = ip, port, left
@@ -170,16 +185,16 @@ func (t *Torrent) addPeer(id string, ip net.IP, port uint16, left uint64) {
 	if left == 0 {
 		t.seeders++
 		peer.Completed = true
-		t.completed++ // peer starts as seeder (has full file) can counts as completed
-		debug("new peer %s is seeder (completed) @ %s:%d", id, ip, port)
+		t.completed++ // peer starts as seeder (has full file) and counts as completed
+		debug("new peer %s is seeder (completed) @ %s:%d", id.String(), ip, port)
 	} else {
 		t.leechers++
 	}
 	t.peers[id] = peer
-	info("added peer %s @ %s:%d", id, ip, port)
+	info("added peer %s @ %s:%d", id.String(), ip, port)
 }
 
-func (t *Torrent) removePeer(id string) {
+func (t *Torrent) removePeer(id HashID) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 
@@ -194,7 +209,7 @@ func (t *Torrent) removePeer(id string) {
 		t.leechers--
 	}
 	delete(t.peers, id)
-	info("removed peer %s @ %s:%d", id, p.IP, p.Port)
+	info("removed peer %s @ %s:%d", id.String(), p.IP, p.Port)
 }
 
 // getPeers returns a list of peers for a client to connect to
@@ -203,7 +218,7 @@ func (t *Torrent) removePeer(id string) {
 //
 //	[4 bytes IP][2 bytes port] for IPv4 (6 bytes per peer)
 //	[16 bytes IP][2 bytes port] for IPv6 (18 bytes per peer)
-func (t *Torrent) getPeers(exclude string, numWant int, clientIP net.IP) (peers []byte, seeders, leechers int) {
+func (t *Torrent) getPeers(exclude HashID, numWant int, clientIP net.IP) (peers []byte, seeders, leechers int) {
 	t.mu.RLock()
 	defer t.mu.RUnlock()
 
@@ -314,8 +329,8 @@ func (tr *Tracker) handleAnnounce(conn *net.UDPConn, addr *net.UDPAddr, packet [
 		return
 	}
 
-	infoHash := hex.EncodeToString(packet[16:36])
-	peerID := hex.EncodeToString(packet[36:56])
+	infoHash := NewHashID(packet[16:36])
+	peerID := NewHashID(packet[36:56])
 	// Skip downloaded (8 bytes)
 	left := binary.BigEndian.Uint64(packet[64:72])
 	// Skip uploaded (8 bytes)
@@ -353,7 +368,7 @@ func (tr *Tracker) handleAnnounce(conn *net.UDPConn, addr *net.UDPAddr, packet [
 	}
 
 	debug("announce from %s: info_hash=%s peer_id=%s event=%d left=%d port=%d num_want=%d ip=%s",
-		addr, infoHash, peerID, event, left, port, numWant, clientIP)
+		addr, infoHash.String(), peerID.String(), event, left, port, numWant, clientIP)
 
 	torrent := tr.getOrCreateTorrent(infoHash)
 
@@ -408,7 +423,7 @@ func (tr *Tracker) handleScrape(conn *net.UDPConn, addr *net.UDPAddr, packet []b
 	binary.BigEndian.PutUint32(response[4:8], transactionID)
 
 	for offset := 16; offset+20 <= len(packet); offset += 20 {
-		infoHash := hex.EncodeToString(packet[offset : offset+20])
+		infoHash := NewHashID(packet[offset : offset+20])
 
 		var seeders, completed, leechers uint32
 		torrent := tr.getTorrent(infoHash)
@@ -424,7 +439,7 @@ func (tr *Tracker) handleScrape(conn *net.UDPConn, addr *net.UDPAddr, packet []b
 		response = binary.BigEndian.AppendUint32(response, completed)
 		response = binary.BigEndian.AppendUint32(response, leechers)
 
-		debug("scrape for %s: seeders=%d completed=%d leechers=%d", infoHash, seeders, completed, leechers)
+		debug("scrape for %s: seeders=%d completed=%d leechers=%d", infoHash.String(), seeders, completed, leechers)
 	}
 
 	if _, err := conn.WriteToUDP(response, addr); err != nil {
@@ -522,14 +537,14 @@ func (tr *Tracker) cleanupLoop() {
 					delete(t.peers, id)
 					removedPeers++
 					debug("cleanup: removed stale peer %s @ %s:%d (last seen %s ago)",
-						id, p.IP, p.Port, time.Since(p.LastAnnounced).Round(time.Minute))
+						id.String(), p.IP, p.Port, time.Since(p.LastAnnounced).Round(time.Minute))
 				}
 			}
 
 			if len(t.peers) == 0 {
 				delete(tr.torrents, hash)
 				removedTorrents++
-				debug("cleanup: removed inactive torrent %s", hash)
+				debug("cleanup: removed inactive torrent %s", hash.String())
 			}
 			t.mu.Unlock()
 		}
@@ -582,7 +597,7 @@ func main() {
 	info("Starting Pico Tracker: %s", version)
 
 	tracker := &Tracker{
-		torrents:    make(map[string]*Torrent),
+		torrents:    make(map[HashID]*Torrent),
 		rateLimiter: make(map[string]*rateLimitEntry),
 	}
 	go tracker.cleanupLoop()
