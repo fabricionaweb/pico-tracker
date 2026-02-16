@@ -43,6 +43,9 @@ const (
 	announceInterval   = 10 // (minutes) between reannounces
 	cleanupInterval    = 30 // (minutes) to remove stale peers and inactive torrents
 	stalePeerThreshold = 60 // (minutes) allows one missed announce
+
+	rateLimitBurst  = 10              // max connect requests per rateLimitWindow
+	rateLimitWindow = 2 * time.Minute // window duration for rate limiting
 )
 
 var secretKey [32]byte // secret for syn-cookie connection ID signing (prevents IP spoofing)
@@ -79,6 +82,46 @@ type Tracker struct {
 	mu       sync.RWMutex
 	torrents map[string]*Torrent // key is info_hash
 	wg       sync.WaitGroup      // tracks in-flight request handlers
+
+	// Rate limiting for connect requests (per IP:Port)
+	rateLimiterMu sync.RWMutex
+	rateLimiter   map[string]*rateLimitEntry // key is "IP:port"
+}
+
+type rateLimitEntry struct {
+	count       int       // requests in current window
+	windowStart time.Time // start of current 2-minute window
+}
+
+// checkRateLimit checks if an IP:Port is allowed to make a connect request
+// Uses sliding window: rateLimitBurst requests per rateLimitWindow per IP:Port
+// Returns (allowed, timeRemaining) - timeRemaining is 0 if allowed
+func (tr *Tracker) checkRateLimit(addr *net.UDPAddr) (allowed bool, timeRemaining time.Duration) {
+	key := addr.String()
+
+	tr.rateLimiterMu.Lock()
+	defer tr.rateLimiterMu.Unlock()
+
+	rl, exists := tr.rateLimiter[key]
+	if !exists {
+		rl = &rateLimitEntry{count: 1, windowStart: time.Now()}
+		tr.rateLimiter[key] = rl
+		return true, 0
+	}
+
+	elapsed := time.Since(rl.windowStart)
+	if elapsed >= rateLimitWindow {
+		rl.count = 1
+		rl.windowStart = time.Now()
+		return true, 0
+	}
+
+	if rl.count < rateLimitBurst {
+		rl.count++
+		return true, 0
+	}
+
+	return false, rateLimitWindow - elapsed
 }
 
 func (t *Tracker) getOrCreateTorrent(hash string) *Torrent {
@@ -202,6 +245,12 @@ func (t *Torrent) getPeers(exclude string, numWant int, clientIP net.IP) (peers 
 // This prevents IP spoofing attacks where someone could fake announce requests
 func (tr *Tracker) handleConnect(conn *net.UDPConn, addr *net.UDPAddr, transactionID uint32) {
 	debug("connect request from %s, transaction_id=%d", addr, transactionID)
+
+	if allowed, remaining := tr.checkRateLimit(addr); !allowed {
+		debug("rate limited connect request from %s, wait %v", addr, remaining)
+		tr.sendError(conn, addr, transactionID, fmt.Sprintf("rate limit exceeded, try again in %v", remaining.Round(time.Second)))
+		return
+	}
 
 	connectionID := generateConnectionID(addr)
 
@@ -533,7 +582,8 @@ func main() {
 	info("Starting Pico Tracker: %s", version)
 
 	tracker := &Tracker{
-		torrents: make(map[string]*Torrent),
+		torrents:    make(map[string]*Torrent),
+		rateLimiter: make(map[string]*rateLimitEntry),
 	}
 	go tracker.cleanupLoop()
 
