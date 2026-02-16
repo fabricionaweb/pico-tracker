@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"crypto/hmac"
 	"crypto/sha256"
 	"encoding/binary"
@@ -10,8 +11,10 @@ import (
 	"log"
 	"net"
 	"os"
+	"os/signal"
 	"strconv"
 	"sync"
+	"syscall"
 	"time"
 )
 
@@ -75,6 +78,7 @@ type Torrent struct {
 type Tracker struct {
 	mu       sync.RWMutex
 	torrents map[string]*Torrent // key is info_hash
+	wg       sync.WaitGroup      // tracks in-flight request handlers
 }
 
 func (t *Tracker) getOrCreateTorrent(hash string) *Torrent {
@@ -396,7 +400,13 @@ func (tr *Tracker) sendError(conn *net.UDPConn, addr *net.UDPAddr, transactionID
 
 // handlePacket processes any incoming UDP packet and routes it to the right handler
 // Packet request format: [connection_id:8][action:4][transaction_id:4]
-func (tr *Tracker) handlePacket(conn *net.UDPConn, addr *net.UDPAddr, packet []byte) {
+func (tr *Tracker) handlePacket(ctx context.Context, conn *net.UDPConn, addr *net.UDPAddr, packet []byte) {
+	select {
+	case <-ctx.Done():
+		return
+	default:
+	}
+
 	if len(packet) < 16 {
 		debug("packet too short (%d bytes) from %s", len(packet), addr)
 		return
@@ -531,7 +541,6 @@ func main() {
 	if err != nil {
 		log.Fatalf("[ERROR] Failed to listen on IPv4: %v", err)
 	}
-	defer conn4.Close()
 	info("UDP Tracker listening on 0.0.0.0:%d (IPv4)", *port)
 
 	// IPv6 is optional - if it fails, the tracker still works with IPv4 only
@@ -539,32 +548,64 @@ func main() {
 	if err != nil {
 		log.Printf("[WARN] IPv6 not available: %v", err)
 	} else {
-		defer conn6.Close()
 		info("UDP Tracker listening on [::]:%d (IPv6)", *port)
 	}
 
-	go tracker.listen(conn4)
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+
+	go tracker.listen(ctx, conn4)
 	if conn6 != nil {
-		go tracker.listen(conn6)
+		go tracker.listen(ctx, conn6)
 	}
 
-	select {}
+	<-ctx.Done()
+	info("Shutting down gracefully...")
+
+	conn4.Close()
+	if conn6 != nil {
+		conn6.Close()
+	}
+
+	info("Waiting for in-flight requests to complete...")
+	done := make(chan struct{})
+	go func() {
+		tracker.wg.Wait()
+		close(done)
+	}()
+
+	select {
+	case <-done:
+		info("Shutdown complete")
+	case <-time.After(30 * time.Second):
+		log.Printf("[WARN] Forcing shutdown after timeout, some handlers incomplete")
+		os.Exit(1)
+	}
 }
 
-func (tr *Tracker) listen(conn *net.UDPConn) {
+func (tr *Tracker) listen(ctx context.Context, conn *net.UDPConn) {
 	buffer := make([]byte, maxPacketSize)
 
 	for {
+		select {
+		case <-ctx.Done():
+			return
+		default:
+		}
+
 		n, clientAddr, err := conn.ReadFromUDP(buffer)
 		if err != nil {
 			log.Printf("[ERROR] Failed to read UDP packet: %v", err)
 			continue
 		}
 
-		// Copy packet since buffer is reused, handle concurrently
 		packet := make([]byte, n)
 		copy(packet, buffer[:n])
 
-		go tr.handlePacket(conn, clientAddr, packet)
+		tr.wg.Add(1)
+		go func() {
+			defer tr.wg.Done()
+			tr.handlePacket(ctx, conn, clientAddr, packet)
+		}()
 	}
 }
