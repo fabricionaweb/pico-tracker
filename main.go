@@ -235,6 +235,11 @@ func (tr *Tracker) handleAnnounce(conn *net.UDPConn, addr *net.UDPAddr, packet [
 	numWantRaw := binary.BigEndian.Uint32(packet[92:96])
 	port := binary.BigEndian.Uint16(packet[96:98])
 
+	if port == 0 {
+		tr.sendError(conn, addr, transactionID, "port cannot be 0")
+		return
+	}
+
 	clientIsV4 := addr.IP.To4() != nil
 	maxWant := maxPeersPerPacketV4
 	peerSize := 6 // IPv4 peer size
@@ -255,8 +260,7 @@ func (tr *Tracker) handleAnnounce(conn *net.UDPConn, addr *net.UDPAddr, packet [
 	// Determine client's IP: use packet source by default, but IPv4 clients can specify a custom IP
 	clientIP := addr.IP
 	if ipAddr != 0 && clientIsV4 {
-		clientIP = net.ParseIP(fmt.Sprintf("%d.%d.%d.%d",
-			byte(ipAddr>>24), byte(ipAddr>>16), byte(ipAddr>>8), byte(ipAddr)))
+		clientIP = net.IPv4(byte(ipAddr>>24), byte(ipAddr>>16), byte(ipAddr>>8), byte(ipAddr))
 	}
 
 	debug("announce from %s: info_hash=%s peer_id=%s event=%d left=%d port=%d num_want=%d ip=%s",
