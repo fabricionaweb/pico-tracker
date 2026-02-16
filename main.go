@@ -456,8 +456,11 @@ func main() {
 	}
 
 	port := flag.Int("port", defaultPort, "port to listen on")
+	flag.IntVar(port, "p", defaultPort, "alias to -port")
 	flag.BoolVar(&debugMode, "debug", debugMode, "enable debug logs")
+	flag.BoolVar(&debugMode, "d", debugMode, "alias to -debug")
 	showVersion := flag.Bool("version", false, "print version")
+	flag.BoolVar(showVersion, "v", false, "alias to -version")
 	flag.Parse()
 
 	if *showVersion {
@@ -466,6 +469,7 @@ func main() {
 	}
 
 	info("Starting Pico Tracker: %s", version)
+	debug("Debug mode enabled")
 
 	tracker := &Tracker{torrents: make(map[string]*Torrent)}
 	go tracker.cleanupLoop()

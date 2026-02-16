@@ -53,9 +53,9 @@ PICO_TRACKER__PORT=6969 ./pico-tracker
 
 | Flag | Environment Variable | Default | Description |
 |------|---------------------|---------|-------------|
-| `-port` | `PICO_TRACKER__PORT` | `1337` | Port to listen on (binds to all interfaces) |
-| `-debug` | `DEBUG` | `false` | Enable verbose debug logging |
-| `-version` | - | - | Print version |
+| `-port, -p` | `PICO_TRACKER__PORT` | `1337` | Port to listen on (binds to all interfaces) |
+| `-debug, -d` | `DEBUG` | `false` | Enable verbose debug logging |
+| `-version, -v` | - | - | Print version |
 
 **Note:** The tracker automatically try to bind to both:
 - `0.0.0.0:<port>` for IPv4
