@@ -1,6 +1,7 @@
 package main
 
 import (
+	"crypto/hmac"
 	"crypto/sha256"
 	"encoding/binary"
 	"encoding/hex"
@@ -41,7 +42,7 @@ const (
 	stalePeerThreshold = 60 // (minutes) allows one missed announce
 )
 
-var secretKey [32]byte
+var secretKey [32]byte // secret for syn-cookie connection ID signing (prevents IP spoofing)
 
 var debugMode = os.Getenv("DEBUG") != ""
 
@@ -215,14 +216,15 @@ func (tr *Tracker) handleConnect(conn *net.UDPConn, addr *net.UDPAddr, transacti
 
 // generateConnectionID creates a stateless connection ID using syn-cookie approach
 // Connection ID format: [32-bit timestamp][32-bit signature]
-// Signature = SHA256(secret_key + client_ip + timestamp)[0:4]
+// Signature = HMAC-SHA256(secret_key, client_ip + timestamp)[0:4]
 func generateConnectionID(addr *net.UDPAddr) uint64 {
 	timestamp := uint32(time.Now().Unix())
-	h := sha256.New()
-	h.Write(secretKey[:])
-	h.Write(addr.IP.To16())
-	binary.Write(h, binary.BigEndian, timestamp)
-	sig := binary.BigEndian.Uint32(h.Sum(nil)[:4])
+	mac := hmac.New(sha256.New, secretKey[:])
+	mac.Write(addr.IP.To16())
+	var tsBytes [4]byte
+	binary.BigEndian.PutUint32(tsBytes[:], timestamp)
+	mac.Write(tsBytes[:])
+	sig := binary.BigEndian.Uint32(mac.Sum(nil)[:4])
 
 	return uint64(timestamp)<<32 | uint64(sig)
 }
@@ -236,11 +238,12 @@ func validateConnectionID(id uint64, addr *net.UDPAddr) bool {
 		return false
 	}
 
-	h := sha256.New()
-	h.Write(secretKey[:])
-	h.Write(addr.IP.To16())
-	binary.Write(h, binary.BigEndian, timestamp)
-	expected := binary.BigEndian.Uint32(h.Sum(nil)[:4])
+	mac := hmac.New(sha256.New, secretKey[:])
+	mac.Write(addr.IP.To16())
+	var tsBytes [4]byte
+	binary.BigEndian.PutUint32(tsBytes[:], timestamp)
+	mac.Write(tsBytes[:])
+	expected := binary.BigEndian.Uint32(mac.Sum(nil)[:4])
 
 	return uint32(id) == expected
 }
@@ -507,12 +510,14 @@ func main() {
 		os.Exit(0)
 	}
 
-	if *secret == "" {
-		copy(secretKey[:], "pico-tracker-default-secret-do-not-use-in-production")
+	secretStr := *secret
+	if secretStr == "" {
+		secretStr = "pico-tracker-default-secret-do-not-use-in-production"
 		log.Printf("[WARN] Using insecure default secret key. Set PICO_TRACKER__SECRET or -secret for production use")
-	} else {
-		copy(secretKey[:], *secret)
 	}
+	h := sha256.New()
+	h.Write([]byte(secretStr))
+	copy(secretKey[:], h.Sum(nil))
 
 	debug("Debug mode is enabled")
 	info("Starting Pico Tracker: %s", version)

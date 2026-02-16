@@ -106,7 +106,7 @@ This tracker fully implements the UDP Tracker Protocol security requirements:
 
 **Syn-Cookie Implementation:** This tracker uses a stateless syn-cookie approach for connection ID management instead of storing connections in memory:
 
-- Connection IDs are cryptographically signed using SHA256 with a secret key
+- Connection IDs are cryptographically signed using HMAC-SHA256 with a secret key
 - Format: `[32-bit timestamp][32-bit signature]`
 - Zero memory overhead - no connection storage needed
 - No cleanup required - IDs are validated mathematically
