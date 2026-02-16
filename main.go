@@ -192,7 +192,7 @@ func (t *Torrent) addPeer(id HashID, ip net.IP, port uint16, left uint64) {
 		t.leechers++
 	}
 	t.peers[id] = peer
-	info("added peer %s @ %s:%d", id.String(), ip, port)
+	debug("added peer %s @ %s:%d", id.String(), ip, port)
 }
 
 func (t *Torrent) removePeer(id HashID) {
