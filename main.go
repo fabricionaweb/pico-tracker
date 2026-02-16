@@ -13,6 +13,8 @@ import (
 	"time"
 )
 
+var version = "dev"
+
 // Protocol constants for the UDP Tracker Protocol (BEP 15)
 // https://bittorrent.org/beps/bep_0015.html
 const (
@@ -449,13 +451,21 @@ func main() {
 	}
 
 	flag.Usage = func() {
-		fmt.Fprintln(os.Stderr, "Pico Tracker: Portable BitTorrent Tracker (UDP)")
+		fmt.Fprintf(os.Stderr, "Pico Tracker: %s\nPortable BitTorrent Tracker (UDP)\n\n", version)
 		flag.PrintDefaults()
 	}
 
 	port := flag.Int("port", defaultPort, "port to listen on")
 	flag.BoolVar(&debugMode, "debug", debugMode, "enable debug logs")
+	showVersion := flag.Bool("version", false, "print version")
 	flag.Parse()
+
+	if *showVersion {
+		fmt.Println(version)
+		os.Exit(0)
+	}
+
+	info("Starting Pico Tracker: %s", version)
 
 	tracker := &Tracker{torrents: make(map[string]*Torrent)}
 	go tracker.cleanupLoop()

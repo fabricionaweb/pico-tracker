@@ -1,6 +1,6 @@
-# Pico Tracker: Portable BitTorrent Tracker (UDP)
+# Pico Tracker: Lightweight BitTorrent Tracker (UDP)
 
-A lightweight BitTorrent tracker implementing the UDP Tracker Protocol (BEP 15). Designed for self-hosting with minimal resource usage and maximum compatibility.
+A portable BitTorrent tracker implementing the UDP Tracker Protocol (BEP 15). Designed for self-hosting with minimal resource usage and maximum compatibility.
 
 ## Features
 
@@ -20,8 +20,11 @@ A lightweight BitTorrent tracker implementing the UDP Tracker Protocol (BEP 15).
 # Go install
 go install github.com/fabricionaweb/pico-tracker@latest
 
-# Or build from source
-go build -trimpath -ldflags="-s -w" .
+# Or build from source (with version)
+go build -trimpath -ldflags="-s -w -X main.version=1.0.0" -o pico-tracker
+
+# Build without version (shows "dev")
+go build -trimpath -ldflags="-s -w" -o pico-tracker
 ```
 
 ### Running
@@ -41,6 +44,9 @@ PICO_TRACKER__PORT=6969 ./pico-tracker
 
 # Get help
 ./pico-tracker -help
+
+# Show version
+./pico-tracker -version
 ```
 
 ### Configuration
@@ -49,6 +55,7 @@ PICO_TRACKER__PORT=6969 ./pico-tracker
 |------|---------------------|---------|-------------|
 | `-port` | `PICO_TRACKER__PORT` | `1337` | Port to listen on (binds to all interfaces) |
 | `-debug` | `DEBUG` | `false` | Enable verbose debug logging |
+| `-version` | - | - | Print version |
 
 **Note:** The tracker automatically try to bind to both:
 - `0.0.0.0:<port>` for IPv4
@@ -59,7 +66,7 @@ PICO_TRACKER__PORT=6969 ./pico-tracker
 Use this URL format in your torrent files or torrent clients:
 
 ```
-udp://your-server:1337
+udp://<dns or ip>:1337
 ```
 
 **Important:** Unlike HTTP trackers, UDP trackers do not use a path (no trailing `/`). The tracker handles all requests on the UDP port directly.
