@@ -1,7 +1,7 @@
 package main
 
 import (
-	"crypto/rand"
+	"crypto/sha256"
 	"encoding/binary"
 	"encoding/hex"
 	"flag"
@@ -39,9 +39,9 @@ const (
 	announceInterval   = 10 // (minutes) between reannounces
 	cleanupInterval    = 30 // (minutes) to remove stale peers and inactive torrents
 	stalePeerThreshold = 60 // (minutes) allows one missed announce
-
-	connectionCleanupInterval = 30 // (seconds) to remove expired connection IDs
 )
+
+var secretKey [32]byte
 
 var debugMode = os.Getenv("DEBUG") != ""
 
@@ -71,16 +71,9 @@ type Torrent struct {
 	completed int // total completions (peers who finished downloading)
 }
 
-type Connection struct {
-	ID        uint64
-	Address   string
-	ExpiresAt time.Time
-}
-
 type Tracker struct {
-	mu          sync.RWMutex
-	torrents    map[string]*Torrent // key is info_hash
-	connections map[uint64]*Connection
+	mu       sync.RWMutex
+	torrents map[string]*Torrent // key is info_hash
 }
 
 func (t *Tracker) getOrCreateTorrent(hash string) *Torrent {
@@ -205,7 +198,7 @@ func (t *Torrent) getPeers(exclude string, numWant int, clientIP net.IP) (peers 
 func (tr *Tracker) handleConnect(conn *net.UDPConn, addr *net.UDPAddr, transactionID uint32) {
 	debug("connect request from %s, transaction_id=%d", addr, transactionID)
 
-	connectionID := tr.generateConnectionID(addr)
+	connectionID := generateConnectionID(addr)
 
 	// Connect response format: [action:4][transaction_id:4][connection_id:8]
 	response := make([]byte, 16)
@@ -220,52 +213,36 @@ func (tr *Tracker) handleConnect(conn *net.UDPConn, addr *net.UDPAddr, transacti
 	}
 }
 
-func (tr *Tracker) generateConnectionID(addr *net.UDPAddr) uint64 {
-	var b [8]byte
-	if _, err := rand.Read(b[:]); err != nil {
-		// Fallback to timestamp + random if crypto/rand fails
-		return uint64(time.Now().UnixNano())
-	}
-	connectionID := binary.BigEndian.Uint64(b[:])
+// generateConnectionID creates a stateless connection ID using syn-cookie approach
+// Connection ID format: [32-bit timestamp][32-bit signature]
+// Signature = SHA256(secret_key + client_ip + timestamp)[0:4]
+func generateConnectionID(addr *net.UDPAddr) uint64 {
+	timestamp := uint32(time.Now().Unix())
+	h := sha256.New()
+	h.Write(secretKey[:])
+	h.Write(addr.IP.To16())
+	binary.Write(h, binary.BigEndian, timestamp)
+	sig := binary.BigEndian.Uint32(h.Sum(nil)[:4])
 
-	tr.mu.Lock()
-	defer tr.mu.Unlock()
-
-	tr.connections[connectionID] = &Connection{
-		ID:        connectionID,
-		Address:   addr.String(),
-		ExpiresAt: time.Now().Add(2 * time.Minute), // 2 minutes expiration (per BEP 15)
-	}
-
-	return connectionID
+	return uint64(timestamp)<<32 | uint64(sig)
 }
 
-func (tr *Tracker) validateConnectionID(connectionID uint64, addr *net.UDPAddr) bool {
-	tr.mu.RLock()
-	defer tr.mu.RUnlock()
+// validateConnectionID verifies the syn-cookie signature and checks expiration
+func validateConnectionID(id uint64, addr *net.UDPAddr) bool {
+	timestamp := uint32(id >> 32)
 
-	if conn, ok := tr.connections[connectionID]; ok {
-		return !time.Now().After(conn.ExpiresAt)
+	// expiration 2 minutes per BEP 15
+	if time.Since(time.Unix(int64(timestamp), 0)) > 2*time.Minute {
+		return false
 	}
 
-	return false
-}
+	h := sha256.New()
+	h.Write(secretKey[:])
+	h.Write(addr.IP.To16())
+	binary.Write(h, binary.BigEndian, timestamp)
+	expected := binary.BigEndian.Uint32(h.Sum(nil)[:4])
 
-func (tr *Tracker) cleanupConnections() {
-	tr.mu.Lock()
-	defer tr.mu.Unlock()
-
-	now := time.Now()
-	removed := 0
-	for id, conn := range tr.connections {
-		if now.After(conn.ExpiresAt) {
-			delete(tr.connections, id)
-			removed++
-		}
-	}
-	if removed > 0 {
-		debug("cleanup: removed %d expired connections", removed)
-	}
+	return uint32(id) == expected
 }
 
 // handleAnnounce is the main interaction - a client tells us they're downloading
@@ -439,7 +416,7 @@ func (tr *Tracker) handlePacket(conn *net.UDPConn, addr *net.UDPAddr, packet []b
 		tr.handleConnect(conn, addr, transactionID)
 
 	case actionAnnounce, actionScrape:
-		if !tr.validateConnectionID(connectionID, addr) {
+		if !validateConnectionID(connectionID, addr) {
 			debug("invalid or expired connection ID from %s: %d", addr, connectionID)
 			tr.sendError(conn, addr, transactionID, "invalid connection ID")
 			return
@@ -456,58 +433,48 @@ func (tr *Tracker) handlePacket(conn *net.UDPConn, addr *net.UDPAddr, packet []b
 	}
 }
 
-// cleanupLoop periodically removes peers that haven't announced recently,
-// deletes torrents that become empty, and cleans up expired connection IDs
+// cleanupLoop periodically removes peers that haven't announced recently
+// and deletes torrents that become empty
 func (tr *Tracker) cleanupLoop() {
-	// Use a shorter interval for connection cleanup since connections expire in 2 minutes (per BEP 15)
-	connectionTicker := time.NewTicker(connectionCleanupInterval * time.Second)
-	defer connectionTicker.Stop()
-
 	ticker := time.NewTicker(cleanupInterval * time.Minute)
 	defer ticker.Stop()
 
 	staleThreshold := stalePeerThreshold * time.Minute
 
-	for {
-		select {
-		case <-connectionTicker.C:
-			tr.cleanupConnections()
+	for range ticker.C {
+		staleDeadline := time.Now().Add(-staleThreshold)
+		tr.mu.Lock()
+		removedTorrents := 0
+		removedPeers := 0
 
-		case <-ticker.C:
-			staleDeadline := time.Now().Add(-staleThreshold)
-			tr.mu.Lock()
-			removedTorrents := 0
-			removedPeers := 0
+		for hash, t := range tr.torrents {
+			t.mu.Lock()
 
-			for hash, t := range tr.torrents {
-				t.mu.Lock()
-
-				for id, p := range t.peers {
-					if p.LastAnnounced.Before(staleDeadline) {
-						if p.Left == 0 {
-							t.seeders--
-						} else {
-							t.leechers--
-						}
-						delete(t.peers, id)
-						removedPeers++
-						debug("cleanup: removed stale peer %s @ %s:%d (last seen %s ago)",
-							id, p.IP, p.Port, time.Since(p.LastAnnounced).Round(time.Minute))
+			for id, p := range t.peers {
+				if p.LastAnnounced.Before(staleDeadline) {
+					if p.Left == 0 {
+						t.seeders--
+					} else {
+						t.leechers--
 					}
+					delete(t.peers, id)
+					removedPeers++
+					debug("cleanup: removed stale peer %s @ %s:%d (last seen %s ago)",
+						id, p.IP, p.Port, time.Since(p.LastAnnounced).Round(time.Minute))
 				}
-
-				if len(t.peers) == 0 {
-					delete(tr.torrents, hash)
-					removedTorrents++
-					debug("cleanup: removed inactive torrent %s", hash)
-				}
-				t.mu.Unlock()
 			}
-			tr.mu.Unlock()
 
-			if removedPeers > 0 || removedTorrents > 0 {
-				info("cleanup: removed %d stale peers and %d inactive torrents", removedPeers, removedTorrents)
+			if len(t.peers) == 0 {
+				delete(tr.torrents, hash)
+				removedTorrents++
+				debug("cleanup: removed inactive torrent %s", hash)
 			}
+			t.mu.Unlock()
+		}
+		tr.mu.Unlock()
+
+		if removedPeers > 0 || removedTorrents > 0 {
+			info("cleanup: removed %d stale peers and %d inactive torrents", removedPeers, removedTorrents)
 		}
 	}
 }
@@ -518,6 +485,8 @@ func main() {
 		defaultPort = p
 	}
 
+	defaultSecret := os.Getenv("PICO_TRACKER__SECRET")
+
 	flag.Usage = func() {
 		fmt.Fprintf(os.Stderr, "Pico Tracker: %s\nPortable BitTorrent Tracker (UDP)\n\n", version)
 		flag.PrintDefaults()
@@ -525,6 +494,8 @@ func main() {
 
 	port := flag.Int("port", defaultPort, "port to listen on")
 	flag.IntVar(port, "p", defaultPort, "alias to -port")
+	secret := flag.String("secret", defaultSecret, "secret key for connection ID signing")
+	flag.StringVar(secret, "s", defaultSecret, "alias to -secret")
 	flag.BoolVar(&debugMode, "debug", debugMode, "enable debug logs")
 	flag.BoolVar(&debugMode, "d", debugMode, "alias to -debug")
 	showVersion := flag.Bool("version", false, "print version")
@@ -536,12 +507,18 @@ func main() {
 		os.Exit(0)
 	}
 
+	if *secret == "" {
+		copy(secretKey[:], "pico-tracker-default-secret-do-not-use-in-production")
+		log.Printf("[WARN] Using insecure default secret key. Set PICO_TRACKER__SECRET or -secret for production use")
+	} else {
+		copy(secretKey[:], *secret)
+	}
+
+	debug("Debug mode is enabled")
 	info("Starting Pico Tracker: %s", version)
-	debug("Debug mode enabled")
 
 	tracker := &Tracker{
-		torrents:    make(map[string]*Torrent),
-		connections: make(map[uint64]*Connection),
+		torrents: make(map[string]*Torrent),
 	}
 	go tracker.cleanupLoop()
 
@@ -569,7 +546,6 @@ func main() {
 	select {}
 }
 
-// listen handles incoming UDP packets on a connection
 func (tr *Tracker) listen(conn *net.UDPConn) {
 	buffer := make([]byte, maxPacketSize)
 

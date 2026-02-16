@@ -39,6 +39,12 @@ go build -trimpath -ldflags="-s -w" -o pico-tracker
 # Custom port using environment variable
 PICO_TRACKER__PORT=6969 ./pico-tracker
 
+# Set secret key for production (recommended)
+./pico-tracker -secret="your-random-secret-here"
+
+# Set secret via environment variable
+PICO_TRACKER__SECRET="your-random-secret-here" ./pico-tracker
+
 # Enable debug logging
 ./pico-tracker -debug
 
@@ -54,6 +60,7 @@ PICO_TRACKER__PORT=6969 ./pico-tracker
 | Flag | Environment Variable | Default | Description |
 |------|---------------------|---------|-------------|
 | `-port, -p` | `PICO_TRACKER__PORT` | `1337` | Port to listen on (binds to all interfaces) |
+| `-secret, -s` | `PICO_TRACKER__SECRET` | *(auto)* | Secret key for connection ID signing (see Security below) |
 | `-debug, -d` | `DEBUG` | `false` | Enable verbose debug logging |
 | `-version, -v` | - | - | Print version |
 
@@ -90,10 +97,26 @@ Following BEP 15 specification:
 
 This tracker fully implements the UDP Tracker Protocol security requirements:
 
-- **Connection ID validation** - All announce and scrape requests are validated against cryptographically generated connection IDs
-- **Connection expiration** - Connection IDs expire after 2 minutes (per BEP 15 specification)
+- **Connection ID validation** - All announce and scrape requests are validated against cryptographically generated connection IDs using a stateless syn-cookie approach (per BEP 15 section "UDP connections / spoofing")
+- **Connection expiration** - Connection IDs expire after 2 minutes (validated cryptographically, no storage required)
 - **Port validation** - Rejects invalid port 0 to prevent malformed peer entries
 - **IP consistency** - Client IP is correctly propagated through all request handlers
+
+### Security
+
+**Syn-Cookie Implementation:** This tracker uses a stateless syn-cookie approach for connection ID management instead of storing connections in memory:
+
+- Connection IDs are cryptographically signed using SHA256 with a secret key
+- Format: `[32-bit timestamp][32-bit signature]`
+- Zero memory overhead - no connection storage needed
+- No cleanup required - IDs are validated mathematically
+- Protection against IP spoofing attacks
+
+**Secret Key:**
+- If no secret is provided, a hardcoded default is used (with a startup warning)
+- **For production, always set a custom secret** via `-secret` flag or `PICO_TRACKER__SECRET` environment variable
+- The secret should be a random string of at least 32 characters
+- All instances in a cluster should share the same secret for consistent validation
 
 ## AI Collaboration
 
