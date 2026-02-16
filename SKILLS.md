@@ -1,5 +1,9 @@
 # Skills & Workflows
 
+## General Guidelines
+
+- Always review and follow the [BEP 15](https://bittorrent.org/beps/bep_0015.html) document as source of truth
+
 ## Language-Specific Guidelines
 
 ### Go
