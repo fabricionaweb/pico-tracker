@@ -279,7 +279,7 @@ func (tr *Tracker) handleAnnounce(conn *net.UDPConn, addr *net.UDPAddr, packet [
 		torrent.addPeer(peerID, clientIP, port, left)
 	}
 
-	peers, seeders, leechers := torrent.getPeers(peerID, numWant, addr.IP)
+	peers, seeders, leechers := torrent.getPeers(peerID, numWant, clientIP)
 	peerCount := len(peers) / peerSize
 	debug("returning %d seeders, %d leechers, %d peers", seeders, leechers, peerCount)
 
