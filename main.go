@@ -51,16 +51,18 @@ func info(format string, v ...any) {
 }
 
 type Peer struct {
-	IP   net.IP
-	Port uint16
-	Left int64 // 0 = seeder, >0 = leecher
+	IP        net.IP
+	Port      uint16
+	Left      int64 // 0 = seeder, >0 = leecher
+	Completed bool  // true if peer has completed this torrent
 }
 
 type Torrent struct {
-	mu       sync.RWMutex
-	peers    map[string]*Peer // key is peer_id
-	seeders  int
-	leechers int
+	mu        sync.RWMutex
+	peers     map[string]*Peer // key is peer_id
+	seeders   int
+	leechers  int
+	completed int // total completions (peers who finished downloading)
 }
 
 type Tracker struct {
@@ -92,18 +94,26 @@ func (t *Torrent) addPeer(id string, ip net.IP, port uint16, left int64) {
 		} else if p.Left > 0 && left == 0 {
 			t.leechers--
 			t.seeders++
-			debug("peer %s became seeder @ %s:%d", id, ip, port)
+			if !p.Completed {
+				p.Completed = true
+				t.completed++
+				debug("peer %s completed torrent @ %s:%d", id, ip, port)
+			}
 		}
 		p.IP, p.Port, p.Left = ip, port, left
 		return
 	}
 
+	peer := &Peer{IP: ip, Port: port, Left: left}
 	if left == 0 {
 		t.seeders++
+		peer.Completed = true
+		t.completed++ // peer starts as seeder (has full file) can counts as completed
+		debug("new peer %s is seeder (completed) @ %s:%d", id, ip, port)
 	} else {
 		t.leechers++
 	}
-	t.peers[id] = &Peer{IP: ip, Port: port, Left: left}
+	t.peers[id] = peer
 	info("added peer %s @ %s:%d", id, ip, port)
 }
 
@@ -298,7 +308,7 @@ func (tr *Tracker) handleScrape(conn *net.UDPConn, addr *net.UDPAddr, packet []b
 		torrent := tr.getTorrent(infoHash)
 		torrent.mu.RLock()
 		seeders := uint32(torrent.seeders)
-		completed := uint32(0) // don't track completed
+		completed := uint32(torrent.completed)
 		leechers := uint32(torrent.leechers)
 		torrent.mu.RUnlock()
 
@@ -306,7 +316,7 @@ func (tr *Tracker) handleScrape(conn *net.UDPConn, addr *net.UDPAddr, packet []b
 		response = binary.BigEndian.AppendUint32(response, completed)
 		response = binary.BigEndian.AppendUint32(response, leechers)
 
-		debug("scrape for %s: seeders=%d leechers=%d", infoHash, seeders, leechers)
+		debug("scrape for %s: seeders=%d completed=%d leechers=%d", infoHash, seeders, completed, leechers)
 	}
 
 	if _, err := conn.WriteToUDP(response, addr); err != nil {
