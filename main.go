@@ -70,7 +70,7 @@ type Tracker struct {
 	torrents map[string]*Torrent // key is info_hash
 }
 
-func (t *Tracker) getTorrent(hash string) *Torrent {
+func (t *Tracker) getOrCreateTorrent(hash string) *Torrent {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 
@@ -78,6 +78,13 @@ func (t *Tracker) getTorrent(hash string) *Torrent {
 		t.torrents[hash] = &Torrent{peers: make(map[string]*Peer)}
 		info("created new torrent %s", hash)
 	}
+
+	return t.torrents[hash]
+}
+
+func (t *Tracker) getTorrent(hash string) *Torrent {
+	t.mu.RLock()
+	defer t.mu.RUnlock()
 
 	return t.torrents[hash]
 }
@@ -250,7 +257,7 @@ func (tr *Tracker) handleAnnounce(conn *net.UDPConn, addr *net.UDPAddr, packet [
 	debug("announce from %s: info_hash=%s peer_id=%s event=%d left=%d port=%d num_want=%d ip=%s",
 		addr, infoHash, peerID, event, left, port, numWant, clientIP)
 
-	torrent := tr.getTorrent(infoHash)
+	torrent := tr.getOrCreateTorrent(infoHash)
 
 	switch event {
 	case eventStopped:
@@ -305,12 +312,15 @@ func (tr *Tracker) handleScrape(conn *net.UDPConn, addr *net.UDPAddr, packet []b
 	for offset := 16; offset+20 <= len(packet); offset += 20 {
 		infoHash := hex.EncodeToString(packet[offset : offset+20])
 
+		var seeders, completed, leechers uint32
 		torrent := tr.getTorrent(infoHash)
-		torrent.mu.RLock()
-		seeders := uint32(torrent.seeders)
-		completed := uint32(torrent.completed)
-		leechers := uint32(torrent.leechers)
-		torrent.mu.RUnlock()
+		if torrent != nil {
+			torrent.mu.RLock()
+			seeders = uint32(torrent.seeders)
+			completed = uint32(torrent.completed)
+			leechers = uint32(torrent.leechers)
+			torrent.mu.RUnlock()
+		}
 
 		response = binary.BigEndian.AppendUint32(response, seeders)
 		response = binary.BigEndian.AppendUint32(response, completed)
