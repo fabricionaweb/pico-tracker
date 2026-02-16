@@ -1,0 +1,12 @@
+# Profiling files
+*.prof
+*.pprof
+
+# Results files - uncomment to ignore, keep for documentation
+# results-*.md
+# !results-*.md
+# !RESULTS_TEMPLATE.md
+
+# Binary
+benchmark
+tracker-benchmark
