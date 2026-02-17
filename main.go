@@ -367,6 +367,11 @@ func (tr *Tracker) handleAnnounce(conn *net.UDPConn, addr *net.UDPAddr, packet [
 	if ipAddr != 0 && clientIsV4 {
 		clientIP = net.IPv4(byte(ipAddr>>24), byte(ipAddr>>16), byte(ipAddr>>8), byte(ipAddr))
 	}
+	// IPv6 clients must send IP field as 0 (per BEP 15)
+	if ipAddr != 0 && !clientIsV4 {
+		tr.sendError(conn, addr, transactionID, "IP address must be 0 for IPv6")
+		return
+	}
 
 	debug("announce from %s: info_hash=%s peer_id=%s event=%d left=%d port=%d num_want=%d ip=%s",
 		addr, infoHash.String(), peerID.String(), event, left, port, numWant, clientIP)
