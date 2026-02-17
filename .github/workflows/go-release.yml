@@ -1,0 +1,115 @@
+name: Go Release
+
+on:
+  release:
+    types: [published]
+
+permissions:
+  contents: write
+  attestations: write
+  id-token: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - goos: linux
+            goarch: 386
+            ext: tar.gz
+          - goos: linux
+            goarch: amd64
+            ext: tar.gz
+          - goos: linux
+            goarch: arm
+            ext: tar.gz
+          - goos: linux
+            goarch: arm64
+            ext: tar.gz
+          - goos: linux
+            goarch: mips
+            ext: tar.gz
+          - goos: linux
+            goarch: mipsle
+            ext: tar.gz
+          - goos: linux
+            goarch: mips64
+            ext: tar.gz
+          - goos: linux
+            goarch: mips64le
+            ext: tar.gz
+          - goos: linux
+            goarch: ppc64
+            ext: tar.gz
+          - goos: linux
+            goarch: ppc64le
+            ext: tar.gz
+          - goos: linux
+            goarch: riscv64
+            ext: tar.gz
+          - goos: linux
+            goarch: s390x
+            ext: tar.gz
+          - goos: linux
+            goarch: loong64
+            ext: tar.gz
+          - goos: darwin
+            goarch: amd64
+            ext: tar.gz
+          - goos: darwin
+            goarch: arm64
+            ext: tar.gz
+          - goos: windows
+            goarch: 386
+            ext: zip
+          - goos: windows
+            goarch: amd64
+            ext: zip
+          - goos: windows
+            goarch: arm64
+            ext: zip
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v6
+
+      - name: Set up Go
+        uses: actions/setup-go@v6
+        with:
+          go-version: '1.23'
+
+      - name: Set version
+        run: echo "VERSION=${GITHUB_REF_NAME#v}" >> $GITHUB_ENV
+
+      - name: Build binary
+        env:
+          GOOS: ${{ matrix.goos }}
+          GOARCH: ${{ matrix.goarch }}
+          CGO_ENABLED: 0
+        run: |
+          go build -ldflags="-s -w -X main.version=$VERSION" -o pico-tracker
+
+      - name: Create archive
+        shell: bash
+        run: |
+          ARTIFACT="pico-tracker-${{ matrix.goos }}-${{ matrix.goarch }}.${{ matrix.ext }}"
+          if [ "${{ matrix.ext }}" = "tar.gz" ]; then
+            tar -czf "$ARTIFACT" pico-tracker
+          else
+            zip "$ARTIFACT" pico-tracker
+          fi
+          echo "ARTIFACT=$ARTIFACT" >> $GITHUB_ENV
+
+      - name: Attest SLSA provenance
+        uses: actions/attest-build-provenance@v3
+        with:
+          subject-path: ${{ env.ARTIFACT }}
+
+      - name: Upload to release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: ${{ env.ARTIFACT }}
+          draft: false
+          prerelease: ${{ github.event.release.prerelease }}
