@@ -87,7 +87,7 @@ func (tr *Tracker) handleAnnounce(conn *net.UDPConn, addr *net.UDPAddr, packet [
 	// Determine client's IP: use packet source by default, but IPv4 clients can specify a custom IP
 	clientIP := addr.IP
 	if ipAddr != 0 && clientIsV4 {
-		clientIP = net.IPv4(byte(ipAddr>>24), byte(ipAddr>>16), byte(ipAddr>>8), byte(ipAddr))
+		clientIP = net.IP{byte(ipAddr >> 24), byte(ipAddr >> 16), byte(ipAddr >> 8), byte(ipAddr)}
 	}
 	// IPv6 clients must send IP field as 0 (per BEP 15)
 	if ipAddr != 0 && !clientIsV4 {
