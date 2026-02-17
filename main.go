@@ -393,7 +393,8 @@ func (tr *Tracker) handleAnnounce(conn *net.UDPConn, addr *net.UDPAddr, packet [
 	response := make([]byte, 20+len(peers))
 	binary.BigEndian.PutUint32(response[0:4], actionAnnounce)
 	binary.BigEndian.PutUint32(response[4:8], transactionID)
-	binary.BigEndian.PutUint32(response[8:12], uint32(time.Duration(announceInterval)*time.Minute/time.Second)) // convert minutes to seconds
+	interval := announceInterval * int(time.Minute/time.Second)
+	binary.BigEndian.PutUint32(response[8:12], uint32(interval))
 	binary.BigEndian.PutUint32(response[12:16], uint32(leechers))
 	binary.BigEndian.PutUint32(response[16:20], uint32(seeders))
 	copy(response[20:], peers)
