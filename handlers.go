@@ -195,8 +195,12 @@ func (tr *Tracker) handlePacket(ctx context.Context, conn *net.UDPConn, addr *ne
 	action := binary.BigEndian.Uint32(packet[8:12])
 	transactionID := binary.BigEndian.Uint32(packet[12:16])
 
-	debug("packet from %s: connection_id=%d action=%d transaction_id=%d",
-		addr, connectionID, action, transactionID)
+	// Don't need to debug everything from loopback, reduce spam (healthcheck)
+	fromLoopback := addr.IP.IsLoopback()
+	if !fromLoopback {
+		debug("packet from %s: connection_id=%d action=%d transaction_id=%d",
+			addr, connectionID, action, transactionID)
+	}
 
 	switch action {
 	case actionConnect:
@@ -220,6 +224,12 @@ func (tr *Tracker) handlePacket(ctx context.Context, conn *net.UDPConn, addr *ne
 		}
 
 	default:
+		// tr.sendError will add debug and skip debug for loopback (healthcheck)
+		if fromLoopback {
+			conn.WriteToUDP([]byte("unknown action\n"), addr)
+			return
+		}
+
 		debug("unknown action %d from %s", action, addr)
 		tr.sendError(conn, addr, transactionID, "unknown action")
 	}
