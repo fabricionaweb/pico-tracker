@@ -66,6 +66,8 @@
 
 ### Don't
 - Add unnecessary comments
+- Remove or modify existing comments (preserve all user-written comments)
+- Refactor or "clean up" code unless explicitly asked
 - Create files unless explicitly asked
 - Guess URLs or paths
 - Use `cd && command` patterns
