@@ -106,7 +106,7 @@ Use this URL format in your torrent files or torrent clients:
 udp://<dns or ip>:1337
 ```
 
-**Important:** Unlike HTTP trackers, UDP trackers do not use a path (no trailing `/`). The tracker handles all requests on the UDP port directly.
+**Note:** Unlike HTTP trackers, UDP trackers don't use URL paths. You can add `/announce` to the URL (e.g., `udp://tracker:1337/announce`), but it will be ignored by clients. All requests are handled directly on the UDP port.
 
 ## Protocol Implementation
 
