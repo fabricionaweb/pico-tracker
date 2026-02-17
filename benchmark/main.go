@@ -1,17 +1,6 @@
 // BitTorrent UDP Tracker Benchmark Tool
 // Simulates concurrent UDP clients to test tracker performance
 //
-// This tool creates multiple workers that each:
-// 1. Connect to the tracker (get connection ID)
-// 2. Send announce requests for multiple torrents
-// 3. Send scrape requests
-//
-// Metrics measured:
-// - RPS (Requests Per Second): Overall throughput
-// - Latency (Min/Avg/P50/P95/P99/Max): Response time distribution
-// - Error rate: Failed requests percentage
-// - Memory growth: Memory usage during test
-//
 // Usage: go run benchmark/main.go -target localhost:1337 -duration 30s -concurrency 100
 
 package main
@@ -29,8 +18,9 @@ import (
 	"time"
 )
 
+// BEP 15 UDP Tracker Protocol constants
 const (
-	protocolID      = 0x41727101980
+	protocolID      = 0x41727101980 // magic constant identifying BitTorrent UDP
 	actionConnect   = 0
 	actionAnnounce  = 1
 	actionScrape    = 2
@@ -38,29 +28,28 @@ const (
 	responseTimeout = 5 * time.Second
 )
 
-// Stats holds all benchmark metrics
-// These are used to calculate RPS, latency percentiles, and error rates
+// Stats holds benchmark metrics
 type Stats struct {
-	TotalRequests   uint64          // Total requests sent (connect + announce + scrape)
-	SuccessfulReqs  uint64          // Requests that received valid responses
-	FailedReqs      uint64          // Requests that timed out or errored
-	ConnectCount    uint64          // Number of connect operations
-	AnnounceCount   uint64          // Number of announce operations
-	ScrapeCount     uint64          // Number of scrape operations
-	Latencies       []time.Duration // All successful request latencies for percentile calculation
-	LatenciesMu     sync.Mutex      // Protects Latencies slice
-	StartTime       time.Time       // Test start time
-	PeakMemoryMB    float64         // Highest memory usage seen
-	InitialMemoryMB float64         // Memory usage at start
+	TotalRequests   uint64
+	SuccessfulReqs  uint64
+	FailedReqs      uint64
+	ConnectCount    uint64
+	AnnounceCount   uint64
+	ScrapeCount     uint64
+	Latencies       []time.Duration
+	LatenciesMu     sync.Mutex
+	StartTime       time.Time
+	PeakMemoryMB    float64
+	InitialMemoryMB float64
 }
 
 type Config struct {
 	Target      string
 	Duration    time.Duration
 	Concurrency int
-	RateLimit   int // requests per second per worker
-	NumHashes   int // number of different info_hashes to use
-	NumWant     int // peers to request
+	RateLimit   int
+	NumHashes   int
+	NumWant     int
 }
 
 type Benchmark struct {
@@ -91,27 +80,22 @@ func (b *Benchmark) Run() {
 	fmt.Printf("Info hashes: %d\n", b.Config.NumHashes)
 	fmt.Println()
 
-	// Start memory monitoring
 	go b.monitorMemory()
-
-	// Start progress reporter
 	go b.reportProgress()
 
-	// Run workers
 	var wg sync.WaitGroup
 	for i := 0; i < b.Config.Concurrency; i++ {
 		wg.Add(1)
 		go b.worker(i, &wg)
 	}
 
-	// Wait for duration
 	time.Sleep(b.Config.Duration)
 	close(b.StopCh)
-
 	wg.Wait()
 	b.printResults()
 }
 
+// worker simulates one BitTorrent client
 func (b *Benchmark) worker(id int, wg *sync.WaitGroup) {
 	defer wg.Done()
 
@@ -136,6 +120,7 @@ func (b *Benchmark) worker(id int, wg *sync.WaitGroup) {
 		hashes[i] = generateInfoHash(id, i)
 	}
 
+	// Initial connect to get connection ID (valid for 2 minutes per BEP 15)
 	connectionID, err := b.doConnect(udpConn)
 	if err != nil {
 		log.Printf("Worker %d: initial connect failed: %v", id, err)
@@ -145,6 +130,7 @@ func (b *Benchmark) worker(id int, wg *sync.WaitGroup) {
 	atomic.AddUint64(&b.Stats.SuccessfulReqs, 1)
 	atomic.AddUint64(&b.Stats.TotalRequests, 1)
 
+	// Reconnect every 2 minutes before connection ID expires
 	reconnectInterval := 2 * time.Minute
 	reconnectTimer := time.AfterFunc(reconnectInterval, func() {
 		connectionID, err = b.doConnect(udpConn)
@@ -190,6 +176,7 @@ func (b *Benchmark) performCycle(conn *net.UDPConn, peerID [20]byte, hashes [][2
 	b.performCycleWithConnID(conn, connectionID, peerID, hashes)
 }
 
+// performCycleWithConnID sends announces for all hashes, then one scrape
 func (b *Benchmark) performCycleWithConnID(conn *net.UDPConn, connectionID uint64, peerID [20]byte, hashes [][20]byte) {
 	for _, hash := range hashes {
 		select {
@@ -222,6 +209,7 @@ func (b *Benchmark) performCycleWithConnID(conn *net.UDPConn, connectionID uint6
 	}
 }
 
+// doConnect sends a connect request and returns the connection ID
 func (b *Benchmark) doConnect(conn *net.UDPConn) (uint64, error) {
 	transactionID := uint32(time.Now().UnixNano())
 
@@ -255,6 +243,7 @@ func (b *Benchmark) doConnect(conn *net.UDPConn) (uint64, error) {
 	return binary.BigEndian.Uint64(response[8:16]), nil
 }
 
+// doAnnounce sends an announce request
 func (b *Benchmark) doAnnounce(conn *net.UDPConn, connectionID uint64, infoHash, peerID [20]byte) error {
 	transactionID := uint32(time.Now().UnixNano())
 
@@ -298,6 +287,7 @@ func (b *Benchmark) doAnnounce(conn *net.UDPConn, connectionID uint64, infoHash,
 	return nil
 }
 
+// doScrape sends a scrape request
 func (b *Benchmark) doScrape(conn *net.UDPConn, connectionID uint64, infoHash [20]byte) error {
 	transactionID := uint32(time.Now().UnixNano())
 
@@ -375,30 +365,6 @@ func (b *Benchmark) reportProgress() {
 	}
 }
 
-// printResults outputs the final benchmark report
-//
-// How to interpret the results:
-//
-// Request Statistics:
-// - Total Requests: Sum of all operations (connect + announce + scrape)
-// - Successful: Should be >99% for good performance
-// - Failed: Should be <1% (timeouts or errors)
-// - RPS: Throughput - higher is better, should scale with concurrency
-//
-// Latency Statistics (measured for successful requests only):
-// - Min: Fastest response (best case with warm caches)
-// - Avg: Mean latency (can be skewed by outliers)
-// - P50: Median - 50% of requests were faster than this
-// - P95: 95% of requests were faster (important for user experience)
-// - P99: 99% of requests were faster (catches worst cases)
-// - Max: Slowest response (usually includes some timeouts)
-//
-// Good local latency targets:
-// - P50 < 5ms, P95 < 10ms, P99 < 50ms
-//
-// Memory Usage:
-// - Growth should be reasonable for the number of connections
-// - Continuous growth throughout test may indicate a leak
 func (b *Benchmark) printResults() {
 	elapsed := time.Since(b.Stats.StartTime)
 
@@ -468,7 +434,6 @@ func (b *Benchmark) printResults() {
 	fmt.Println("========================================")
 	fmt.Println()
 
-	// Quick interpretation hints
 	if b.Stats.TotalRequests > 0 {
 		successRate := float64(b.Stats.SuccessfulReqs) / float64(b.Stats.TotalRequests) * 100
 		if successRate < 95 {
@@ -525,7 +490,6 @@ func generateInfoHash(workerID, hashID int) [20]byte {
 	var hash [20]byte
 	binary.BigEndian.PutUint32(hash[0:4], uint32(workerID))
 	binary.BigEndian.PutUint32(hash[4:8], uint32(hashID))
-	// Fill rest with deterministic pattern
 	for i := 8; i < 20; i++ {
 		hash[i] = byte(i)
 	}
