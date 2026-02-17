@@ -115,7 +115,6 @@ func (b *Benchmark) Run() {
 func (b *Benchmark) worker(id int, wg *sync.WaitGroup) {
 	defer wg.Done()
 
-	// Create UDP connection
 	conn, err := net.Dial("udp", b.Config.Target)
 	if err != nil {
 		log.Printf("Worker %d: failed to connect: %v", id, err)
@@ -126,18 +125,38 @@ func (b *Benchmark) worker(id int, wg *sync.WaitGroup) {
 	udpConn := conn.(*net.UDPConn)
 	udpConn.SetDeadline(time.Now().Add(b.Config.Duration + 10*time.Second))
 
-	// Rate limiter
 	var rateLimiter <-chan time.Time
 	if b.Config.RateLimit > 0 {
 		rateLimiter = time.Tick(time.Second / time.Duration(b.Config.RateLimit))
 	}
 
-	// Pre-generate info hashes and peer IDs for this worker
 	hashes := make([][20]byte, b.Config.NumHashes)
 	peerID := generatePeerID(id)
 	for i := range hashes {
 		hashes[i] = generateInfoHash(id, i)
 	}
+
+	connectionID, err := b.doConnect(udpConn)
+	if err != nil {
+		log.Printf("Worker %d: initial connect failed: %v", id, err)
+		return
+	}
+	atomic.AddUint64(&b.Stats.ConnectCount, 1)
+	atomic.AddUint64(&b.Stats.SuccessfulReqs, 1)
+	atomic.AddUint64(&b.Stats.TotalRequests, 1)
+
+	reconnectInterval := 2 * time.Minute
+	reconnectTimer := time.AfterFunc(reconnectInterval, func() {
+		connectionID, err = b.doConnect(udpConn)
+		if err != nil {
+			log.Printf("Worker %d: re-connect failed: %v", id, err)
+		} else {
+			atomic.AddUint64(&b.Stats.ConnectCount, 1)
+			atomic.AddUint64(&b.Stats.SuccessfulReqs, 1)
+			atomic.AddUint64(&b.Stats.TotalRequests, 1)
+		}
+	})
+	defer reconnectTimer.Stop()
 
 	for {
 		select {
@@ -150,15 +169,13 @@ func (b *Benchmark) worker(id int, wg *sync.WaitGroup) {
 			<-rateLimiter
 		}
 
-		// Perform a full cycle: connect -> announce -> scrape
-		b.performCycle(udpConn, peerID, hashes)
+		b.performCycleWithConnID(udpConn, connectionID, peerID, hashes)
 	}
 }
 
 func (b *Benchmark) performCycle(conn *net.UDPConn, peerID [20]byte, hashes [][20]byte) {
 	start := time.Now()
 
-	// Step 1: Connect
 	connectionID, err := b.doConnect(conn)
 	if err != nil {
 		atomic.AddUint64(&b.Stats.FailedReqs, 1)
@@ -170,7 +187,10 @@ func (b *Benchmark) performCycle(conn *net.UDPConn, peerID [20]byte, hashes [][2
 	atomic.AddUint64(&b.Stats.TotalRequests, 1)
 	b.recordLatency(time.Since(start))
 
-	// Step 2: Announce for each hash
+	b.performCycleWithConnID(conn, connectionID, peerID, hashes)
+}
+
+func (b *Benchmark) performCycleWithConnID(conn *net.UDPConn, connectionID uint64, peerID [20]byte, hashes [][20]byte) {
 	for _, hash := range hashes {
 		select {
 		case <-b.StopCh:
@@ -178,8 +198,8 @@ func (b *Benchmark) performCycle(conn *net.UDPConn, peerID [20]byte, hashes [][2
 		default:
 		}
 
-		start = time.Now()
-		err = b.doAnnounce(conn, connectionID, hash, peerID)
+		start := time.Now()
+		err := b.doAnnounce(conn, connectionID, hash, peerID)
 		if err != nil {
 			atomic.AddUint64(&b.Stats.FailedReqs, 1)
 		} else {
@@ -190,9 +210,8 @@ func (b *Benchmark) performCycle(conn *net.UDPConn, peerID [20]byte, hashes [][2
 		}
 	}
 
-	// Step 3: Scrape (for first hash only)
-	start = time.Now()
-	err = b.doScrape(conn, connectionID, hashes[0])
+	start := time.Now()
+	err := b.doScrape(conn, connectionID, hashes[0])
 	if err != nil {
 		atomic.AddUint64(&b.Stats.FailedReqs, 1)
 	} else {
