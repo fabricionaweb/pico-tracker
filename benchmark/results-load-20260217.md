@@ -25,6 +25,12 @@
 | Info Hashes per Worker | 5 |
 | Num Want | 50 |
 
+### Command Executed
+
+```
+go run benchmark/main.go -duration 30s -concurrency 100
+```
+
 ## Results Summary
 
 ### Request Statistics
