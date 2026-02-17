@@ -65,6 +65,16 @@ PICO_TRACKER__SECRET="your-random-secret-here" ./pico-tracker
 | `-debug, -d` | `DEBUG` | `false` | Enable verbose debug logging |
 | `-version, -v` | - | - | Print version |
 
+## Project Structure
+
+```
+main.go       - Entry point and server setup
+handlers.go   - UDP request handlers (connect, announce, scrape, listen)
+tracker.go    - Core tracker logic (peer management, rate limiting, cleanup)
+protocol.go   - Protocol constants and connection ID validation
+types.go      - Data types (HashID, Peer, Torrent, Tracker)
+```
+
 **Note:** The tracker automatically try to bind to both:
 - `0.0.0.0:<port>` for IPv4
 - `[::]:<port>` for IPv6
