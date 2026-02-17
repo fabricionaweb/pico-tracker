@@ -56,6 +56,25 @@ PICO_TRACKER__SECRET="your-random-secret-here" ./pico-tracker
 ./pico-tracker -version
 ```
 
+### Docker
+
+```bash
+# Pull the latest release
+docker pull ghcr.io/fabricionaweb/pico-tracker:latest
+
+# Run with defaults (note: UDP port)
+docker run -p 1337:1337/udp ghcr.io/fabricionaweb/pico-tracker:latest
+
+# Run with custom port
+docker run -p 6969:6969/udp -e PICO_TRACKER__PORT=6969 ghcr.io/fabricionaweb/pico-tracker:latest
+
+# Run with debug logs
+docker run -p 1337:1337/udp -e DEBUG=1 ghcr.io/fabricionaweb/pico-tracker:latest
+
+# Run with custom secret
+docker run -p 1337:1337/udp -e PICO_TRACKER__SECRET=your-secret ghcr.io/fabricionaweb/pico-tracker:latest
+```
+
 ### Configuration
 
 | Flag | Environment Variable | Default | Description |
