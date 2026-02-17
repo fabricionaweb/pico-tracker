@@ -528,10 +528,11 @@ func (tr *Tracker) cleanupLoop() {
 	var rateLimitStaleDeadline time.Time
 
 	for range ticker.C {
-		// clean peers and torrents
+		// clean peers (read lock allows concurrent access)
 		staleDeadline := time.Now().Add(-staleThreshold)
-		tr.mu.Lock()
-		removedTorrents := 0
+		tr.mu.RLock()
+
+		var toDelete []HashID
 		removedPeers := 0
 
 		for hash, t := range tr.torrents {
@@ -552,13 +553,29 @@ func (tr *Tracker) cleanupLoop() {
 			}
 
 			if len(t.peers) == 0 {
-				delete(tr.torrents, hash)
-				removedTorrents++
-				debug("cleanup: removed inactive torrent %s", hash.String())
+				toDelete = append(toDelete, hash)
 			}
 			t.mu.Unlock()
 		}
-		tr.mu.Unlock()
+		tr.mu.RUnlock()
+
+		// delete empty torrents (write lock, re-check to avoid race)
+		removedTorrents := 0
+		if len(toDelete) > 0 {
+			tr.mu.Lock()
+			for _, hash := range toDelete {
+				if t, ok := tr.torrents[hash]; ok {
+					t.mu.Lock()
+					if len(t.peers) == 0 {
+						delete(tr.torrents, hash)
+						removedTorrents++
+						debug("cleanup: removed inactive torrent %s", hash.String())
+					}
+					t.mu.Unlock()
+				}
+			}
+			tr.mu.Unlock()
+		}
 
 		// clean rate limiter
 		tr.rateLimiterMu.Lock()
