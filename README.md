@@ -7,6 +7,7 @@ A portable BitTorrent tracker implementing the UDP Tracker Protocol (BEP 15). De
 - **UDP Protocol** - Faster and more efficient than HTTP trackers
 - **Full IPv4 and IPv6 support** - Returns appropriate peer lists based on client connection type (BEP 15 compliant)
 - **Dual-stack** - Automatically listens on both IPv4 (0.0.0.0) and IPv6 ([::])
+- **Rate limiting** - Prevents connect request abuse per IP:Port
 - **Automatic peer cleanup** - Removes inactive torrents every 30 minutes
 - **Zero-config** - No database required, everything stored in memory
 - **Lightning fast** - All operations happen in RAM
