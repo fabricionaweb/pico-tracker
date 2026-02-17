@@ -133,7 +133,7 @@ func (tr *Tracker) handleAnnounce(conn *net.UDPConn, addr *net.UDPAddr, packet [
 
 // handleScrape lets clients ask for statistics about torrents without announcing
 // This is useful for checking if a torrent is active before downloading
-// Scrape request format: [connection_id:8][action:4][transaction_id:4][info_hash:20]
+// Scrape header format: [connection_id:8][action:4][transaction_id:4][info_hash:20]
 func (tr *Tracker) handleScrape(conn *net.UDPConn, addr *net.UDPAddr, packet []byte, transactionID uint32) {
 	if len(packet) < 36 {
 		debug("scrape request too short from %s", addr)
@@ -177,7 +177,8 @@ func (tr *Tracker) handleScrape(conn *net.UDPConn, addr *net.UDPAddr, packet []b
 }
 
 // handlePacket processes any incoming UDP packet and routes it to the right handler
-// Packet request format: [connection_id:8][action:4][transaction_id:4]
+// based on the action field. Connection ID validation is performed for announce/scrape
+// Packet header format: [connection_id:8][action:4][transaction_id:4]
 func (tr *Tracker) handlePacket(ctx context.Context, conn *net.UDPConn, addr *net.UDPAddr, packet []byte) {
 	select {
 	case <-ctx.Done():

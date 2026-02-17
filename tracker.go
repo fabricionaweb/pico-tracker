@@ -2,15 +2,16 @@ package main
 
 import (
 	"encoding/binary"
+	"math/rand"
 	"net"
 	"time"
 )
 
 // Tracker methods
 
-// checkRateLimit checks if an IP:Port is allowed to make a connect request
-// Uses sliding window: rateLimitBurst requests per rateLimitWindow per IP:Port
-// Returns (allowed, timeRemaining) - timeRemaining is 0 if allowed
+// checkRateLimit enforces per-IP rate limiting on connect requests using a sliding window
+// Returns (allowed, timeRemaining) - timeRemaining is 0 if allowed, otherwise the duration
+// until the client can retry. This prevents UDP amplification attacks
 func (tr *Tracker) checkRateLimit(addr *net.UDPAddr) (allowed bool, timeRemaining time.Duration) {
 	key := addr.String()
 	window := rateLimitWindow * time.Minute
@@ -115,34 +116,40 @@ func (t *Torrent) removePeer(id HashID) {
 
 // getPeers returns a list of peers for a client to connect to
 // Returns up to numWant peers matching the client's IP version (not including requesting peer)
-// The returned data is packed as:
-//
-//	[4 bytes IP][2 bytes port] for IPv4 (6 bytes per peer)
-//	[16 bytes IP][2 bytes port] for IPv6 (18 bytes per peer)
 func (t *Torrent) getPeers(exclude HashID, numWant int, clientIP net.IP) (peers []byte, seeders, leechers int) {
 	t.mu.RLock()
 	defer t.mu.RUnlock()
 
 	seeders, leechers = t.seeders, t.leechers
 	wantV4Peers := clientIP.To4() != nil
-	peerSize := 6 // IPv4 peer size
-	if !wantV4Peers {
-		peerSize = 18 // IPv6 peer size
-	}
 
+	// Collect matching peers in single pass
+	var peerIDs []HashID
 	for id, p := range t.peers {
 		if id == exclude {
 			continue
 		}
-
 		isV4Peer := p.IP.To4() != nil
-		if isV4Peer != wantV4Peers {
-			continue
+		if isV4Peer == wantV4Peers {
+			peerIDs = append(peerIDs, id)
 		}
+	}
 
-		if len(peers)/peerSize >= numWant {
-			break
-		}
+	if len(peerIDs) == 0 {
+		return nil, seeders, leechers
+	}
+
+	// Limit to available peers
+	numPeers := numWant
+	if numPeers > len(peerIDs) {
+		numPeers = len(peerIDs)
+	}
+
+	// Start at random offset for fair peer distribution across clients
+	start := rand.Intn(len(peerIDs))
+	for i := 0; i < numPeers; i++ {
+		idx := (start + i) % len(peerIDs)
+		p := t.peers[peerIDs[idx]]
 
 		if wantV4Peers {
 			peers = append(peers, p.IP.To4()...)
