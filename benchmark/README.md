@@ -25,10 +25,10 @@ go run benchmark/main.go
 
 The benchmark tool simulates real BitTorrent clients by:
 1. Creating UDP connections to the tracker
-2. Sending **connect** requests (handshake)
-3. Sending **announce** requests (register peers, get peer lists)
-4. Sending **scrape** requests (get torrent statistics)
-5. Repeating this cycle continuously
+2. Sending a **connect** request once to get a connection ID
+3. Sending **announce** requests repeatedly (register peers, get peer lists)
+4. Sending **scrape** requests periodically (get torrent statistics)
+5. Reconnecting every 2 minutes (connection IDs expire per BEP 15)
 
 ## Usage
 
@@ -81,7 +81,7 @@ Failed:             678 (0.05%)
 Requests/Second:    41,522.60
 
 --- Request Breakdown ---
-Connect:            249,136
+Connect:            ~100 (once per worker per 2 min)
 Announce:           996,544
 Scrape:             249,136
 
@@ -103,9 +103,10 @@ Growth:             133.30 MB
 ### Interpreting Request Statistics
 
 #### Total Requests
-- **What it is**: Sum of all connect, announce, and scrape requests sent
+- **What it is**: Sum of all announce and scrape requests (+ connect at start)
 - **Good value**: Depends on duration and concurrency, but higher is generally better
-- **Example**: 100 workers × 30 seconds × ~400 req/s = ~1.2M requests
+- **Example**: 100 workers × 30 seconds × ~350 req/s = ~1M requests
+- **Note**: Connect requests are minimal (~100 for 100 workers) because connection IDs are reused for 2 minutes
 
 #### Success Rate
 - **What it is**: Percentage of requests that got valid responses
@@ -117,9 +118,9 @@ Growth:             133.30 MB
 #### RPS (Requests Per Second)
 - **What it is**: Average throughput over the test
 - **Good benchmarks**:
-  - 10 workers: 5,000-10,000 RPS
-  - 100 workers: 30,000-50,000 RPS
-  - 1000 workers: 50,000-100,000 RPS (depending on hardware)
+  - 10 workers: 50,000-70,000 RPS
+  - 100 workers: 300,000-500,000 RPS
+  - 1000 workers: 500,000-1,000,000 RPS (depending on hardware)
 - **Rule of thumb**: Should scale roughly linearly with concurrency up to CPU limits
 
 ### Interpreting Latency Statistics
@@ -192,23 +193,23 @@ While the benchmark only shows its own memory, the tracker memory grows with:
 
 ### Reference Results
 
-Based on testing on Apple M4 Pro (2024):
+Based on testing on Apple M4 Pro (2024/2026):
 
 | Concurrency | Duration | Total Req | RPS | P95 Latency | Status |
 |-------------|----------|-----------|-----|-------------|--------|
-| 10 | 30s | 300K | 10,000 | 0.5ms | Excellent |
-| 100 | 30s | 1.2M | 40,000 | 2ms | Excellent |
-| 1000 | 30s | 3M | 100,000 | 10ms | Good |
+| 10 | 5s | 300K | 60,000 | 0.2ms | Excellent |
+| 100 | 30s | 3M | 100,000 | 1ms | Excellent |
+| 1000 | 30s | 10M | 300,000 | 5ms | Good |
 
 ### Expected Scaling
 
 On a modern 4-core machine, you should see:
 
 ```
-1 worker    → ~1,000 RPS
-10 workers  → ~8,000 RPS (linear)
-100 workers → ~50,000 RPS (sub-linear, some contention)
-1000 workers → ~80,000 RPS (diminishing returns)
+1 worker    → ~6,000 RPS
+10 workers  → ~60,000 RPS (linear)
+100 workers → ~500,000 RPS (sub-linear, some contention)
+1000 workers → ~800,000 RPS (diminishing returns)
 ```
 
 **Why sub-linear scaling?**
@@ -219,18 +220,18 @@ On a modern 4-core machine, you should see:
 ### When Is Performance "Good Enough"?
 
 **For personal/hobby use:**
-- RPS > 1,000
-- P95 < 50ms
+- RPS > 10,000
+- P95 < 5ms
 - Error rate < 1%
 
 **For small communities (1K users):**
-- RPS > 10,000
-- P95 < 20ms
+- RPS > 50,000
+- P95 < 10ms
 - Error rate < 0.1%
 
 **For large trackers (10K+ users):**
-- RPS > 50,000
-- P95 < 50ms
+- RPS > 200,000
+- P95 < 20ms
 - Error rate < 0.01%
 - Consider horizontal scaling (multiple tracker instances)
 
@@ -241,8 +242,9 @@ On a modern 4-core machine, you should see:
 **Symptoms**: RPS much lower than expected for hardware
 
 **Possible causes**:
-1. **Rate limiting**: Check if `-rate` flag is set
-2. **Network issues**: Test with localhost first
+1. **Rate limiting**: Check if `-rate` flag is set on benchmark
+2. **Tracker rate limiting**: Tracker allows 10 connect requests per 2 min per IP
+3. **Network issues**: Test with localhost first
 3. **CPU bottleneck**: Check CPU usage during test
 4. **Lock contention**: Check if P99 >> P50
 
