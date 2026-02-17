@@ -11,7 +11,6 @@ import (
 	"fmt"
 	"log"
 	"net"
-	"runtime"
 	"sort"
 	"sync"
 	"sync/atomic"
@@ -24,23 +23,95 @@ const (
 	actionConnect   = 0
 	actionAnnounce  = 1
 	actionScrape    = 2
-	connectTimeout  = 5 * time.Second
 	responseTimeout = 5 * time.Second
 )
 
-// Stats holds benchmark metrics
+// LatencyStats stores latencies for a specific operation type (connect/announce/scrape)
+type LatencyStats struct {
+	Latencies []time.Duration
+	Mu        sync.Mutex
+}
+
+func (l *LatencyStats) Record(d time.Duration) {
+	l.Mu.Lock()
+	l.Latencies = append(l.Latencies, d)
+	l.Mu.Unlock()
+}
+
+func (l *LatencyStats) getSorted() []time.Duration {
+	l.Mu.Lock()
+	defer l.Mu.Unlock()
+	if len(l.Latencies) == 0 {
+		return nil
+	}
+	sorted := make([]time.Duration, len(l.Latencies))
+	copy(sorted, l.Latencies)
+	sort.Slice(sorted, func(i, j int) bool { return sorted[i] < sorted[j] })
+	return sorted
+}
+
+func (l *LatencyStats) Percentile(p float64) time.Duration {
+	sorted := l.getSorted()
+	if len(sorted) == 0 {
+		return 0
+	}
+	idx := int(float64(len(sorted)) * p / 100.0)
+	if idx >= len(sorted) {
+		idx = len(sorted) - 1
+	}
+	return sorted[idx]
+}
+
+func (l *LatencyStats) Avg() time.Duration {
+	l.Mu.Lock()
+	defer l.Mu.Unlock()
+	if len(l.Latencies) == 0 {
+		return 0
+	}
+	var sum time.Duration
+	for _, d := range l.Latencies {
+		sum += d
+	}
+	return sum / time.Duration(len(l.Latencies))
+}
+
+func (l *LatencyStats) Min() time.Duration {
+	sorted := l.getSorted()
+	if len(sorted) == 0 {
+		return 0
+	}
+	return sorted[0]
+}
+
+func (l *LatencyStats) Max() time.Duration {
+	sorted := l.getSorted()
+	if len(sorted) == 0 {
+		return 0
+	}
+	return sorted[len(sorted)-1]
+}
+
+func (l *LatencyStats) Count() int {
+	l.Mu.Lock()
+	defer l.Mu.Unlock()
+	return len(l.Latencies)
+}
+
 type Stats struct {
-	TotalRequests   uint64
-	SuccessfulReqs  uint64
-	FailedReqs      uint64
-	ConnectCount    uint64
-	AnnounceCount   uint64
-	ScrapeCount     uint64
-	Latencies       []time.Duration
-	LatenciesMu     sync.Mutex
-	StartTime       time.Time
-	PeakMemoryMB    float64
-	InitialMemoryMB float64
+	TotalRequests        uint64
+	SuccessfulReqs       uint64
+	FailedReqs           uint64
+	ConnectCount         uint64
+	AnnounceCount        uint64
+	ScrapeCount          uint64
+	ConnectLatency       LatencyStats
+	AnnounceLatency      LatencyStats
+	ScrapeLatency        LatencyStats
+	ResponseSizes        []int
+	ResponseSizesMu      sync.Mutex
+	TotalResponseSizes   []int
+	TotalResponseSizesMu sync.Mutex
+	StartTime            time.Time
 }
 
 type Config struct {
@@ -62,7 +133,8 @@ func NewBenchmark(cfg Config) *Benchmark {
 	return &Benchmark{
 		Config: cfg,
 		Stats: Stats{
-			Latencies: make([]time.Duration, 0, 100000),
+			ResponseSizes:      make([]int, 0, 100000),
+			TotalResponseSizes: make([]int, 0, 100000),
 		},
 		StopCh: make(chan struct{}),
 	}
@@ -70,7 +142,6 @@ func NewBenchmark(cfg Config) *Benchmark {
 
 func (b *Benchmark) Run() {
 	b.Stats.StartTime = time.Now()
-	b.Stats.InitialMemoryMB = getMemoryMB()
 
 	fmt.Printf("Starting benchmark...\n")
 	fmt.Printf("Target: %s\n", b.Config.Target)
@@ -80,7 +151,6 @@ func (b *Benchmark) Run() {
 	fmt.Printf("Info hashes: %d\n", b.Config.NumHashes)
 	fmt.Println()
 
-	go b.monitorMemory()
 	go b.reportProgress()
 
 	var wg sync.WaitGroup
@@ -95,7 +165,6 @@ func (b *Benchmark) Run() {
 	b.printResults()
 }
 
-// worker simulates one BitTorrent client
 func (b *Benchmark) worker(id int, wg *sync.WaitGroup) {
 	defer wg.Done()
 
@@ -109,9 +178,10 @@ func (b *Benchmark) worker(id int, wg *sync.WaitGroup) {
 	udpConn := conn.(*net.UDPConn)
 	udpConn.SetDeadline(time.Now().Add(b.Config.Duration + 10*time.Second))
 
-	var rateLimiter <-chan time.Time
+	var rateLimiter *time.Ticker
 	if b.Config.RateLimit > 0 {
-		rateLimiter = time.Tick(time.Second / time.Duration(b.Config.RateLimit))
+		rateLimiter = time.NewTicker(time.Second / time.Duration(b.Config.RateLimit))
+		defer rateLimiter.Stop()
 	}
 
 	hashes := make([][20]byte, b.Config.NumHashes)
@@ -120,7 +190,6 @@ func (b *Benchmark) worker(id int, wg *sync.WaitGroup) {
 		hashes[i] = generateInfoHash(id, i)
 	}
 
-	// Initial connect to get connection ID (valid for 2 minutes per BEP 15)
 	connectionID, err := b.doConnect(udpConn)
 	if err != nil {
 		log.Printf("Worker %d: initial connect failed: %v", id, err)
@@ -130,9 +199,8 @@ func (b *Benchmark) worker(id int, wg *sync.WaitGroup) {
 	atomic.AddUint64(&b.Stats.SuccessfulReqs, 1)
 	atomic.AddUint64(&b.Stats.TotalRequests, 1)
 
-	// Reconnect every 2 minutes before connection ID expires
-	reconnectInterval := 2 * time.Minute
-	reconnectTimer := time.AfterFunc(reconnectInterval, func() {
+	// Refresh connection ID before it expires (2 min per BEP 15)
+	reconnectTimer := time.AfterFunc(2*time.Minute, func() {
 		connectionID, err = b.doConnect(udpConn)
 		if err != nil {
 			log.Printf("Worker %d: re-connect failed: %v", id, err)
@@ -152,28 +220,11 @@ func (b *Benchmark) worker(id int, wg *sync.WaitGroup) {
 		}
 
 		if rateLimiter != nil {
-			<-rateLimiter
+			<-rateLimiter.C
 		}
 
 		b.performCycleWithConnID(udpConn, connectionID, peerID, hashes)
 	}
-}
-
-func (b *Benchmark) performCycle(conn *net.UDPConn, peerID [20]byte, hashes [][20]byte) {
-	start := time.Now()
-
-	connectionID, err := b.doConnect(conn)
-	if err != nil {
-		atomic.AddUint64(&b.Stats.FailedReqs, 1)
-		atomic.AddUint64(&b.Stats.TotalRequests, 1)
-		return
-	}
-	atomic.AddUint64(&b.Stats.ConnectCount, 1)
-	atomic.AddUint64(&b.Stats.SuccessfulReqs, 1)
-	atomic.AddUint64(&b.Stats.TotalRequests, 1)
-	b.recordLatency(time.Since(start))
-
-	b.performCycleWithConnID(conn, connectionID, peerID, hashes)
 }
 
 // performCycleWithConnID sends announces for all hashes, then one scrape
@@ -185,7 +236,6 @@ func (b *Benchmark) performCycleWithConnID(conn *net.UDPConn, connectionID uint6
 		default:
 		}
 
-		start := time.Now()
 		err := b.doAnnounce(conn, connectionID, hash, peerID)
 		if err != nil {
 			atomic.AddUint64(&b.Stats.FailedReqs, 1)
@@ -193,11 +243,9 @@ func (b *Benchmark) performCycleWithConnID(conn *net.UDPConn, connectionID uint6
 			atomic.AddUint64(&b.Stats.AnnounceCount, 1)
 			atomic.AddUint64(&b.Stats.SuccessfulReqs, 1)
 			atomic.AddUint64(&b.Stats.TotalRequests, 1)
-			b.recordLatency(time.Since(start))
 		}
 	}
 
-	start := time.Now()
 	err := b.doScrape(conn, connectionID, hashes[0])
 	if err != nil {
 		atomic.AddUint64(&b.Stats.FailedReqs, 1)
@@ -205,12 +253,13 @@ func (b *Benchmark) performCycleWithConnID(conn *net.UDPConn, connectionID uint6
 		atomic.AddUint64(&b.Stats.ScrapeCount, 1)
 		atomic.AddUint64(&b.Stats.SuccessfulReqs, 1)
 		atomic.AddUint64(&b.Stats.TotalRequests, 1)
-		b.recordLatency(time.Since(start))
 	}
 }
 
-// doConnect sends a connect request and returns the connection ID
+// doConnect sends a BEP 15 connect request and returns the connection ID.
+// Connection ID is valid for 2 minutes.
 func (b *Benchmark) doConnect(conn *net.UDPConn) (uint64, error) {
+	start := time.Now()
 	transactionID := uint32(time.Now().UnixNano())
 
 	request := make([]byte, 16)
@@ -218,33 +267,32 @@ func (b *Benchmark) doConnect(conn *net.UDPConn) (uint64, error) {
 	binary.BigEndian.PutUint32(request[8:12], actionConnect)
 	binary.BigEndian.PutUint32(request[12:16], transactionID)
 
-	if _, err := conn.Write(request); err != nil {
-		return 0, err
+	var n int
+	var err error
+	if _, err = conn.Write(request); err == nil {
+		response := make([]byte, 16)
+		conn.SetReadDeadline(time.Now().Add(responseTimeout))
+		n, err = conn.Read(response)
+		if err == nil && n >= 16 {
+			respAction := binary.BigEndian.Uint32(response[0:4])
+			respTxID := binary.BigEndian.Uint32(response[4:8])
+			if respAction == actionConnect && respTxID == transactionID {
+				b.Stats.ConnectLatency.Record(time.Since(start))
+				b.recordResponseSize(n, true)
+				return binary.BigEndian.Uint64(response[8:16]), nil
+			}
+			err = fmt.Errorf("invalid response")
+		}
 	}
 
-	response := make([]byte, 16)
-	conn.SetReadDeadline(time.Now().Add(responseTimeout))
-	n, err := conn.Read(response)
-	if err != nil {
-		return 0, err
-	}
-
-	if n < 16 {
-		return 0, fmt.Errorf("short response")
-	}
-
-	respAction := binary.BigEndian.Uint32(response[0:4])
-	respTxID := binary.BigEndian.Uint32(response[4:8])
-
-	if respAction != actionConnect || respTxID != transactionID {
-		return 0, fmt.Errorf("invalid response")
-	}
-
-	return binary.BigEndian.Uint64(response[8:16]), nil
+	b.Stats.ConnectLatency.Record(time.Since(start))
+	b.recordResponseSize(0, false)
+	return 0, err
 }
 
-// doAnnounce sends an announce request
+// doAnnounce registers a peer with the tracker for a given info hash.
 func (b *Benchmark) doAnnounce(conn *net.UDPConn, connectionID uint64, infoHash, peerID [20]byte) error {
+	start := time.Now()
 	transactionID := uint32(time.Now().UnixNano())
 
 	request := make([]byte, 98)
@@ -253,42 +301,41 @@ func (b *Benchmark) doAnnounce(conn *net.UDPConn, connectionID uint64, infoHash,
 	binary.BigEndian.PutUint32(request[12:16], transactionID)
 	copy(request[16:36], infoHash[:])
 	copy(request[36:56], peerID[:])
-	binary.BigEndian.PutUint64(request[56:64], 0)   // downloaded
-	binary.BigEndian.PutUint64(request[64:72], 100) // left
-	binary.BigEndian.PutUint64(request[72:80], 0)   // uploaded
-	binary.BigEndian.PutUint32(request[80:84], 0)   // event (none)
-	binary.BigEndian.PutUint32(request[84:88], 0)   // IP
-	binary.BigEndian.PutUint32(request[88:92], 0)   // key
+	binary.BigEndian.PutUint64(request[56:64], 0)
+	binary.BigEndian.PutUint64(request[64:72], 100) // left=100 means leecher
+	binary.BigEndian.PutUint64(request[72:80], 0)
+	binary.BigEndian.PutUint32(request[80:84], 0) // event: none
+	binary.BigEndian.PutUint32(request[84:88], 0) // IP
+	binary.BigEndian.PutUint32(request[88:92], 0) // key
 	binary.BigEndian.PutUint32(request[92:96], uint32(b.Config.NumWant))
-	binary.BigEndian.PutUint16(request[96:98], 6881) // port
+	binary.BigEndian.PutUint16(request[96:98], 6881)
 
-	if _, err := conn.Write(request); err != nil {
-		return err
+	var n int
+	var err error
+	if _, err = conn.Write(request); err == nil {
+		response := make([]byte, 1500)
+		conn.SetReadDeadline(time.Now().Add(responseTimeout))
+		n, err = conn.Read(response)
+		if err == nil && n >= 20 {
+			respAction := binary.BigEndian.Uint32(response[0:4])
+			respTxID := binary.BigEndian.Uint32(response[4:8])
+			if respAction == actionAnnounce && respTxID == transactionID {
+				b.Stats.AnnounceLatency.Record(time.Since(start))
+				b.recordResponseSize(n, true)
+				return nil
+			}
+			err = fmt.Errorf("invalid response")
+		}
 	}
 
-	response := make([]byte, 1500)
-	conn.SetReadDeadline(time.Now().Add(responseTimeout))
-	n, err := conn.Read(response)
-	if err != nil {
-		return err
-	}
-
-	if n < 20 {
-		return fmt.Errorf("short response")
-	}
-
-	respAction := binary.BigEndian.Uint32(response[0:4])
-	respTxID := binary.BigEndian.Uint32(response[4:8])
-
-	if respAction != actionAnnounce || respTxID != transactionID {
-		return fmt.Errorf("invalid response")
-	}
-
-	return nil
+	b.Stats.AnnounceLatency.Record(time.Since(start))
+	b.recordResponseSize(0, false)
+	return err
 }
 
-// doScrape sends a scrape request
+// doScrape requests torrent statistics from the tracker.
 func (b *Benchmark) doScrape(conn *net.UDPConn, connectionID uint64, infoHash [20]byte) error {
+	start := time.Now()
 	transactionID := uint32(time.Now().UnixNano())
 
 	request := make([]byte, 36)
@@ -297,52 +344,55 @@ func (b *Benchmark) doScrape(conn *net.UDPConn, connectionID uint64, infoHash [2
 	binary.BigEndian.PutUint32(request[12:16], transactionID)
 	copy(request[16:36], infoHash[:])
 
-	if _, err := conn.Write(request); err != nil {
-		return err
-	}
-
-	response := make([]byte, 20)
-	conn.SetReadDeadline(time.Now().Add(responseTimeout))
-	n, err := conn.Read(response)
-	if err != nil {
-		return err
-	}
-
-	if n < 20 {
-		return fmt.Errorf("short response")
-	}
-
-	respAction := binary.BigEndian.Uint32(response[0:4])
-	respTxID := binary.BigEndian.Uint32(response[4:8])
-
-	if respAction != actionScrape || respTxID != transactionID {
-		return fmt.Errorf("invalid response")
-	}
-
-	return nil
-}
-
-func (b *Benchmark) recordLatency(d time.Duration) {
-	b.Stats.LatenciesMu.Lock()
-	b.Stats.Latencies = append(b.Stats.Latencies, d)
-	b.Stats.LatenciesMu.Unlock()
-}
-
-func (b *Benchmark) monitorMemory() {
-	ticker := time.NewTicker(time.Second)
-	defer ticker.Stop()
-
-	for {
-		select {
-		case <-ticker.C:
-			mem := getMemoryMB()
-			if mem > b.Stats.PeakMemoryMB {
-				b.Stats.PeakMemoryMB = mem
+	var n int
+	var err error
+	if _, err = conn.Write(request); err == nil {
+		response := make([]byte, 20)
+		conn.SetReadDeadline(time.Now().Add(responseTimeout))
+		n, err = conn.Read(response)
+		if err == nil && n >= 20 {
+			respAction := binary.BigEndian.Uint32(response[0:4])
+			respTxID := binary.BigEndian.Uint32(response[4:8])
+			if respAction == actionScrape && respTxID == transactionID {
+				b.Stats.ScrapeLatency.Record(time.Since(start))
+				b.recordResponseSize(n, true)
+				return nil
 			}
-		case <-b.StopCh:
-			return
+			err = fmt.Errorf("invalid response")
 		}
 	}
+
+	b.Stats.ScrapeLatency.Record(time.Since(start))
+	b.recordResponseSize(0, false)
+	return err
+}
+
+// recordResponseSize tracks response sizes for successful requests separately from all requests.
+// This allows accurate min/max/avg for successful responses while still counting failures.
+func (b *Benchmark) recordResponseSize(n int, success bool) {
+	b.Stats.ResponseSizesMu.Lock()
+	if success && n > 0 {
+		b.Stats.ResponseSizes = append(b.Stats.ResponseSizes, n)
+	}
+	b.Stats.ResponseSizesMu.Unlock()
+
+	b.Stats.TotalResponseSizesMu.Lock()
+	b.Stats.TotalResponseSizes = append(b.Stats.TotalResponseSizes, n)
+	b.Stats.TotalResponseSizesMu.Unlock()
+}
+
+// getResponseSizes returns copies of response size slices to avoid data races.
+func (b *Benchmark) getResponseSizes() (sizes []int, totalSizes []int) {
+	b.Stats.ResponseSizesMu.Lock()
+	sizes = make([]int, len(b.Stats.ResponseSizes))
+	copy(sizes, b.Stats.ResponseSizes)
+	b.Stats.ResponseSizesMu.Unlock()
+
+	b.Stats.TotalResponseSizesMu.Lock()
+	totalSizes = make([]int, len(b.Stats.TotalResponseSizes))
+	copy(totalSizes, b.Stats.TotalResponseSizes)
+	b.Stats.TotalResponseSizesMu.Unlock()
+	return
 }
 
 func (b *Benchmark) reportProgress() {
@@ -368,6 +418,13 @@ func (b *Benchmark) reportProgress() {
 func (b *Benchmark) printResults() {
 	elapsed := time.Since(b.Stats.StartTime)
 
+	totalRequests := atomic.LoadUint64(&b.Stats.TotalRequests)
+	successfulReqs := atomic.LoadUint64(&b.Stats.SuccessfulReqs)
+	failedReqs := atomic.LoadUint64(&b.Stats.FailedReqs)
+	connectCount := atomic.LoadUint64(&b.Stats.ConnectCount)
+	announceCount := atomic.LoadUint64(&b.Stats.AnnounceCount)
+	scrapeCount := atomic.LoadUint64(&b.Stats.ScrapeCount)
+
 	fmt.Println()
 	fmt.Println("========================================")
 	fmt.Println("       BENCHMARK RESULTS")
@@ -377,75 +434,94 @@ func (b *Benchmark) printResults() {
 	fmt.Println()
 
 	fmt.Println("--- Request Statistics ---")
-	fmt.Printf("Total Requests:     %d\n", b.Stats.TotalRequests)
+	fmt.Printf("Total Requests:     %d\n", totalRequests)
 	successRate := float64(0)
-	if b.Stats.TotalRequests > 0 {
-		successRate = float64(b.Stats.SuccessfulReqs) / float64(b.Stats.TotalRequests) * 100
+	if totalRequests > 0 {
+		successRate = float64(successfulReqs) / float64(totalRequests) * 100
 	}
-	fmt.Printf("Successful:         %d (%.2f%%)\n", b.Stats.SuccessfulReqs, successRate)
+	fmt.Printf("Successful:         %d (%.2f%%)\n", successfulReqs, successRate)
 	failRate := float64(0)
-	if b.Stats.TotalRequests > 0 {
-		failRate = float64(b.Stats.FailedReqs) / float64(b.Stats.TotalRequests) * 100
+	if totalRequests > 0 {
+		failRate = float64(failedReqs) / float64(totalRequests) * 100
 	}
-	fmt.Printf("Failed:             %d (%.2f%%)\n", b.Stats.FailedReqs, failRate)
-	fmt.Printf("Requests/Second:    %.2f\n", float64(b.Stats.TotalRequests)/elapsed.Seconds())
+	fmt.Printf("Failed:             %d (%.2f%%)\n", failedReqs, failRate)
+	fmt.Printf("Requests/Second:    %.2f\n", float64(totalRequests)/elapsed.Seconds())
 	fmt.Println()
 
 	fmt.Println("--- Request Breakdown ---")
-	fmt.Printf("Connect:            %d\n", b.Stats.ConnectCount)
-	fmt.Printf("Announce:           %d\n", b.Stats.AnnounceCount)
-	fmt.Printf("Scrape:             %d\n", b.Stats.ScrapeCount)
+	fmt.Printf("Connect:            %d\n", connectCount)
+	fmt.Printf("Announce:           %d\n", announceCount)
+	fmt.Printf("Scrape:             %d\n", scrapeCount)
 	fmt.Println()
 
 	fmt.Println("--- Latency Statistics ---")
-	if len(b.Stats.Latencies) > 0 {
-		b.Stats.LatenciesMu.Lock()
-		sort.Slice(b.Stats.Latencies, func(i, j int) bool {
-			return b.Stats.Latencies[i] < b.Stats.Latencies[j]
-		})
 
-		p50 := percentile(b.Stats.Latencies, 50)
-		p95 := percentile(b.Stats.Latencies, 95)
-		p99 := percentile(b.Stats.Latencies, 99)
-		min := b.Stats.Latencies[0]
-		max := b.Stats.Latencies[len(b.Stats.Latencies)-1]
-
-		var sum time.Duration
-		for _, l := range b.Stats.Latencies {
-			sum += l
+	printLatencyBreakdown := func(name string, lat *LatencyStats, count uint64) {
+		if count == 0 {
+			return
 		}
-		avg := sum / time.Duration(len(b.Stats.Latencies))
+		fmt.Printf("\n%s Latency (n=%d):\n", name, count)
+		fmt.Printf("  Min:  %s\n", lat.Min())
+		fmt.Printf("  Avg:  %s\n", lat.Avg())
+		fmt.Printf("  P50:  %s\n", lat.Percentile(50))
+		fmt.Printf("  P95:  %s\n", lat.Percentile(95))
+		fmt.Printf("  P99:  %s\n", lat.Percentile(99))
+		fmt.Printf("  Max:  %s\n", lat.Max())
+	}
 
-		b.Stats.LatenciesMu.Unlock()
+	printLatencyBreakdown("Connect", &b.Stats.ConnectLatency, connectCount)
+	printLatencyBreakdown("Announce", &b.Stats.AnnounceLatency, announceCount)
+	printLatencyBreakdown("Scrape", &b.Stats.ScrapeLatency, scrapeCount)
 
-		fmt.Printf("Min:                %s\n", min)
-		fmt.Printf("Avg:                %s\n", avg)
-		fmt.Printf("P50:                %s\n", p50)
-		fmt.Printf("P95:                %s\n", p95)
-		fmt.Printf("P99:                %s\n", p99)
-		fmt.Printf("Max:                %s\n", max)
+	fmt.Println()
+
+	respSizes, totalRespSizes := b.getResponseSizes()
+
+	respSizeCount := len(respSizes)
+	if respSizeCount > 0 {
+		var totalSize int
+		minSize := respSizes[0]
+		maxSize := respSizes[0]
+		for _, s := range respSizes {
+			totalSize += s
+			if s < minSize {
+				minSize = s
+			}
+			if s > maxSize {
+				maxSize = s
+			}
+		}
+		avgSize := float64(totalSize) / float64(respSizeCount)
+		fmt.Println("--- Response Size Statistics (successful) ---")
+		fmt.Printf("Min:    %d bytes\n", minSize)
+		fmt.Printf("Avg:    %.0f bytes\n", avgSize)
+		fmt.Printf("Max:    %d bytes\n", maxSize)
+		fmt.Printf("Count:  %d\n", respSizeCount)
+	}
+
+	totalRespSizeCount := len(totalRespSizes)
+	if totalRespSizeCount > 0 {
+		var totalSize int
+		for _, s := range totalRespSizes {
+			totalSize += s
+		}
+		avgSize := float64(totalSize) / float64(totalRespSizeCount)
+		fmt.Println("--- Response Size Statistics (all) ---")
+		fmt.Printf("Avg:    %.0f bytes\n", avgSize)
+		fmt.Printf("Count:  %d (includes %d failures with 0 bytes)\n", totalRespSizeCount, totalRespSizeCount-respSizeCount)
 	}
 	fmt.Println()
 
-	fmt.Println("--- Memory Usage ---")
-	fmt.Printf("Initial:            %.2f MB\n", b.Stats.InitialMemoryMB)
-	fmt.Printf("Peak:               %.2f MB\n", b.Stats.PeakMemoryMB)
-	fmt.Printf("Growth:             %.2f MB\n", b.Stats.PeakMemoryMB-b.Stats.InitialMemoryMB)
-	fmt.Println("========================================")
-	fmt.Println()
-
-	if b.Stats.TotalRequests > 0 {
-		successRate := float64(b.Stats.SuccessfulReqs) / float64(b.Stats.TotalRequests) * 100
+	if totalRequests > 0 {
+		successRate := float64(successfulReqs) / float64(totalRequests) * 100
 		if successRate < 95 {
 			fmt.Println("⚠️  WARNING: Error rate is high (>5%). Check tracker logs.")
 		} else if successRate < 99 {
 			fmt.Println("⚠️  NOTE: Error rate is elevated (1-5%). Monitor if consistent.")
 		}
 
-		if len(b.Stats.Latencies) > 0 {
-			b.Stats.LatenciesMu.Lock()
-			p95 := percentile(b.Stats.Latencies, 95)
-			b.Stats.LatenciesMu.Unlock()
+		if b.Stats.AnnounceLatency.Count() > 0 {
+			p95 := b.Stats.AnnounceLatency.Percentile(95)
 
 			if p95 > 50*time.Millisecond {
 				fmt.Println("⚠️  WARNING: P95 latency is high (>50ms). Consider reducing concurrency.")
@@ -456,7 +532,7 @@ func (b *Benchmark) printResults() {
 			}
 		}
 
-		rps := float64(b.Stats.TotalRequests) / elapsed.Seconds()
+		rps := float64(totalRequests) / elapsed.Seconds()
 		if rps > 50000 {
 			fmt.Println("✓ Excellent throughput (>50K RPS).")
 		} else if rps > 10000 {
@@ -469,23 +545,7 @@ func (b *Benchmark) printResults() {
 	fmt.Println("See benchmark/README.md for detailed result interpretation.")
 }
 
-func percentile(latencies []time.Duration, p float64) time.Duration {
-	if len(latencies) == 0 {
-		return 0
-	}
-	index := int(float64(len(latencies)) * p / 100.0)
-	if index >= len(latencies) {
-		index = len(latencies) - 1
-	}
-	return latencies[index]
-}
-
-func getMemoryMB() float64 {
-	var m runtime.MemStats
-	runtime.ReadMemStats(&m)
-	return float64(m.Alloc) / 1024 / 1024
-}
-
+// generateInfoHash creates a deterministic 20-byte info hash for testing.
 func generateInfoHash(workerID, hashID int) [20]byte {
 	var hash [20]byte
 	binary.BigEndian.PutUint32(hash[0:4], uint32(workerID))
@@ -496,6 +556,7 @@ func generateInfoHash(workerID, hashID int) [20]byte {
 	return hash
 }
 
+// generatePeerID creates a uTorrent-style peer ID for testing.
 func generatePeerID(workerID int) [20]byte {
 	var id [20]byte
 	copy(id[0:8], []byte("-UT1234-"))

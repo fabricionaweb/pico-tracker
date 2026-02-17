@@ -85,7 +85,7 @@ Connect:            ~100 (once per worker per 2 min)
 Announce:           996,544
 Scrape:             249,136
 
---- Latency Statistics ---
+--- Latency Statistics (per operation) ---
 Min:                123µs
 Avg:                2.4ms
 P50:                1.8ms
@@ -93,10 +93,10 @@ P95:                5.2ms
 P99:                12.3ms
 Max:                145.2ms
 
---- Memory Usage ---
-Initial:            12.50 MB
-Peak:               145.80 MB
-Growth:             133.30 MB
+--- Latency by Operation ---
+Connect (avg):      0.5ms
+Announce (avg):     2.8ms
+Scrape (avg):       1.2ms
 ========================================
 ```
 
@@ -124,6 +124,16 @@ Growth:             133.30 MB
 - **Rule of thumb**: Should scale roughly linearly with concurrency up to CPU limits
 
 ### Interpreting Latency Statistics
+
+#### Latency by Operation
+
+The benchmark tracks latency separately for each operation type:
+
+- **Connect**: Generates connection ID (~0.1-1ms)
+- **Announce**: Registers peers, generates peer lists (~1-5ms)
+- **Scrape**: Read-only stats lookup (~0.5-2ms)
+
+Each operation has its own min/avg/p50/p95/p99/max stats printed at the end.
 
 #### Why Multiple Percentiles?
 
@@ -172,50 +182,6 @@ Different percentiles tell different stories:
 5. **Increasing over time**: Latency grows throughout test
    - **Meaning**: Likely memory pressure or queue buildup
    - **Status**: Investigate memory usage and goroutine leaks
-
-### Interpreting Memory Usage
-
-#### Memory Growth
-
-- **What it tracks**: How much memory the benchmark client uses (not the tracker)
-- **Good**: Growth proportional to active connections/requests
-- **Concern**: Continuous unbounded growth
-- **Note**: The tracker will use more memory than the benchmark tool
-
-#### Tracker Memory (Not Shown)
-
-While the benchmark only shows its own memory, the tracker memory grows with:
-- Each unique peer: ~50-100 bytes
-- Each unique torrent: ~200-500 bytes + peer storage
-- Example: 100K peers across 1K torrents ≈ 50-100MB
-
-## Performance Benchmarks
-
-### Reference Results
-
-Based on testing on Apple M4 Pro (2024/2026):
-
-| Concurrency | Duration | Total Req | RPS | P95 Latency | Status |
-|-------------|----------|-----------|-----|-------------|--------|
-| 10 | 5s | 300K | 60,000 | 0.2ms | Excellent |
-| 100 | 30s | 3M | 100,000 | 1ms | Excellent |
-| 1000 | 30s | 10M | 300,000 | 5ms | Good |
-
-### Expected Scaling
-
-On a modern 4-core machine, you should see:
-
-```
-1 worker    → ~6,000 RPS
-10 workers  → ~60,000 RPS (linear)
-100 workers → ~500,000 RPS (sub-linear, some contention)
-1000 workers → ~800,000 RPS (diminishing returns)
-```
-
-**Why sub-linear scaling?**
-- Lock contention on torrent state
-- Network stack limitations
-- Go runtime scheduler overhead
 
 ### When Is Performance "Good Enough"?
 
@@ -284,20 +250,6 @@ On a modern 4-core machine, you should see:
 - Check peer count in tracker (enable debug logging)
 - Profile to find hot paths
 - Consider reducing `numwant` parameter
-
-### Memory Leaks
-
-**Symptoms**: Memory continuously grows throughout test
-
-**Possible causes**:
-1. **Goroutine leak**: Connections not being closed
-2. **State accumulation**: Peers/torrents not being cleaned up
-3. **Buffer growth**: Growing slices without bound
-
-**Solutions**:
-- Check tracker has cleanupLoop running
-- Monitor tracker memory separately (not just benchmark)
-- Enable Go profiling: `curl http://localhost:6060/debug/pprof/heap`
 
 ## Best Practices
 

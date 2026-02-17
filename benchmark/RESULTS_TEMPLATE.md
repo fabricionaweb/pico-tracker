@@ -50,11 +50,11 @@
 
 ### Request Breakdown
 
-| Operation | Count | Avg Latency | Expected Range |
-|-----------|-------|-------------|----------------|
-| Connect | 0 | 0ms | 0.1-2ms |
-| Announce | 0 | 0ms | 0.5-5ms |
-| Scrape | 0 | 0ms | 0.2-3ms |
+| Operation | Count | Avg Latency | P95 Latency | Expected Range |
+|-----------|-------|-------------|-------------|----------------|
+| Connect | 0 | 0ms | 0ms | 0.1-2ms |
+| Announce | 0 | 0ms | 0ms | 0.5-5ms |
+| Scrape | 0 | 0ms | 0ms | 0.2-3ms |
 
 **What this means:**
 - **Connect**: Initial handshake to get a connection ID (16 byte response)
@@ -67,77 +67,36 @@
 - Scrape is medium (read-only stats lookup)
 - Latency increases with torrent/peer count
 
-### Latency Statistics
+### Latency by Operation
 
-| Percentile | Latency | Status |
-|------------|---------|--------|
-| Min | 0ms | - |
-| Avg | 0ms | - |
-| P50 | 0ms | - |
-| P95 | 0ms | - |
-| P99 | 0ms | - |
-| Max | 0ms | - |
+| Operation | Min | Avg | P50 | P95 | P99 | Max |
+|-----------|-----|-----|-----|-----|-----|-----|
+| Connect | 0ms | 0ms | 0ms | 0ms | 0ms | 0ms |
+| Announce | 0ms | 0ms | 0ms | 0ms | 0ms | 0ms |
+| Scrape | 0ms | 0ms | 0ms | 0ms | 0ms | 0ms |
 
 **What this means:**
-- **Min**: Fastest response time (best case)
-- **Avg**: Mean latency (can be skewed by outliers)
-- **P50 (Median)**: 50% of requests were faster than this
-- **P95**: 95% of requests were faster than this (important for user experience)
-- **P99**: 99% of requests were faster than this (catches worst cases)
-- **Max**: Slowest response (usually includes timeouts or outliers)
+- **Connect**: Initial handshake to get a connection ID (16 byte response)
+- **Announce**: Peer registration and peer list retrieval (20+ byte response)
+- **Scrape**: Torrent statistics request (20 byte response per hash)
 
-**Latency Status Guide (Local Network):**
-- **Excellent**: P95 < 1ms, P99 < 5ms
-- **Good**: P95 < 5ms, P99 < 10ms
-- **Acceptable**: P95 < 10ms, P99 < 50ms
-- **Poor**: P95 > 50ms (indicates CPU bottleneck or lock contention)
-- **Critical**: P95 > 100ms (tracker is overloaded)
-
-**Latency Status Guide (Remote/Internet):**
-- **Excellent**: P95 < 10ms, P99 < 50ms
-- **Good**: P95 < 50ms, P99 < 100ms
-- **Acceptable**: P95 < 100ms, P99 < 200ms
-- **Poor**: P95 > 200ms (network or tracker issues)
-
-### Memory Usage
-
-| Metric | Value | Status |
-|--------|-------|--------|
-| Initial | 0.00 MB | - |
-| Peak | 0.00 MB | - |
-| Growth | 0.00 MB | - |
-
-**What this means:**
-- **Initial**: Memory used when benchmark started
-- **Peak**: Highest memory usage during the test
-- **Growth**: Net memory increase (Peak - Initial)
-
-**Memory Status Guide:**
-- **Good**: Growth < 100MB, stable or slowly growing
-- **Acceptable**: Growth 100-500MB
-- **Concern**: Growth > 500MB or continuous growth (possible memory leak)
-- **Critical**: Growth > 1GB (likely memory leak or excessive peer/torrent storage)
-
-**Memory Usage Factors:**
-- Each peer consumes ~50-100 bytes
-- Each torrent with peers consumes ~200-500 bytes
-- 100K peers = ~10MB memory
-- 10K torrents with 10 peers each = ~20-50MB
+**Performance Notes:**
+- Connect should be fastest (no state lookup, just ID generation)
+- Announce is heaviest (peer list generation, state updates)
+- Scrape is medium (read-only stats lookup)
+- Latency increases with torrent/peer count
 
 ## Performance Analysis
 
 ### Bottlenecks Identified
 
-1. **CPU-bound**: If latency increases linearly with concurrency but memory is stable
+1. **CPU-bound**: If latency increases linearly with concurrency
    - *Solution*: Optimize hot paths, reduce allocations, profile with pprof
 
-2. **Memory-bound**: If memory grows rapidly or hits limits
-   - *Solution*: Check for memory leaks, implement peer expiration, reduce cache sizes
-
-3. **Lock contention**: If P99 >> P95 (high variance)
+2. **Lock contention**: If P99 >> P95 (high variance)
    - *Solution*: Reduce mutex scope, use RWMutex, implement sharding
 
-4. **Network I/O**: If running remotely with high latency
+3. **Network I/O**: If running remotely with high latency
    - *Solution*: This is expected, ensure tracker has enough bandwidth
 
 ### Optimization Recommendations
@@ -154,12 +113,7 @@ Based on results, consider these optimizations:
    - Batch peer updates
    - Use sync.Pool for temporary buffers
 
-3. **Memory efficiency**:
-   - Implement aggressive peer timeout (currently 30 min cleanup)
-   - Limit max peers per torrent
-   - Use cleanupLoop more frequently if memory is high
-
-4. **Scalability**:
+3. **Scalability**:
    - Run multiple tracker instances behind load balancer
    - Use Redis/external state for horizontal scaling
 
@@ -201,19 +155,6 @@ Top 10 functions by CPU time:
 - If `sync.(*Mutex).Lock` is high: Lock contention, use more granular locks
 - If `syscall` or `net` functions are high: Network bottleneck (unusual for local tests)
 
-### Memory Profile
-```
-Top 10 allocators:
-1.
-2.
-3.
-```
-
-**Analysis Guide:**
-- If peer/map operations allocate heavily: Consider pre-allocation
-- If slice growth causes allocations: Set capacity hints
-- If string conversions allocate: Use []byte where possible
-
 ## Historical Results
 
 | Date | Version | Concurrency | RPS | P95 Latency | Error Rate | Notes |
@@ -224,7 +165,6 @@ Top 10 allocators:
 - RPS should stay stable or improve with optimizations
 - Latency should not increase significantly
 - Error rate should remain < 1%
-- Memory growth should be proportional to peer count, not test duration
 
 ## Quick Reference
 
@@ -238,7 +178,7 @@ Top 10 allocators:
 **For medium deployments (1K-10K users):**
 - RPS > 10,000
 - P95 < 20ms
-- Requires dedicated CPU core, reasonable memory
+- Requires dedicated CPU core
 
 **For large deployments (10K+ users):**
 - RPS > 50,000
@@ -248,9 +188,8 @@ Top 10 allocators:
 ### When to worry:
 
 1. **Error rate > 1%**: Clients will retry, increasing load
-2. **P95 latency increasing with test duration**: Likely memory leak or queue buildup
+2. **P95 latency increasing with test duration**: Likely queue buildup
 3. **RPS plateaus while CPU < 50%**: Lock contention or I/O bottleneck
-4. **Memory grows > 100MB/min**: Memory leak or excessive state retention
 
 ### When to optimize:
 
