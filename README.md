@@ -131,7 +131,7 @@ This tracker fully implements the UDP Tracker Protocol security requirements:
 
 ## AI Collaboration
 
-This project was developed using **Kimi 2.5** (AI agent) through iterative refinement, focusing on:
+This project was developed using **Kimi K2.5** and **MiniMax M2.5** (AI agents) through iterative refinement, focusing on:
 - Clean, maintainable code
 - Standards compliance (BEP 15)
 - Minimal dependencies
