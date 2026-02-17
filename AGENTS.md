@@ -92,7 +92,7 @@
 - Check for untracked files
 - Verify no secrets before committing
 - Use conventional commit format: `<type>: <description>` (e.g., `feat:`, `fix:`, `refactor:`, `docs:`, `chore:`)
-- **REQUIRED**: Use `--trailer 'Co-authored-by: <AI-Model-Name> <<model-contact>>'` (substitute with current AI model name)
+- **REQUIRED**: Use `--trailer 'Co-authored-by: <AI-Model-Name> <<model-contact>>'` (search git log for previous commits with `Co-authored-by` to find exact format used)
 
 ## Skills
 
