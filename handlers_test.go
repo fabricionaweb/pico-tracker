@@ -1,9 +1,11 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/binary"
+	"fmt"
 	"net"
 	"testing"
 	"time"
@@ -31,6 +33,15 @@ func (m *mockPacketConn) LocalAddr() net.Addr                { return m.localAdd
 func (m *mockPacketConn) SetDeadline(t time.Time) error      { return nil }
 func (m *mockPacketConn) SetReadDeadline(t time.Time) error  { return nil }
 func (m *mockPacketConn) SetWriteDeadline(t time.Time) error { return nil }
+
+// mockFailingPacketConn simulates a write failure for testing error paths
+type mockFailingPacketConn struct {
+	mockPacketConn
+}
+
+func (m *mockFailingPacketConn) WriteTo(p []byte, addr net.Addr) (n int, err error) {
+	return 0, fmt.Errorf("simulated write failure")
+}
 
 // setupTracker creates a Tracker with secret key initialized for connection ID generation/validation
 func setupTracker(t *testing.T) *Tracker {
@@ -94,6 +105,12 @@ func TestHandleConnect_RateLimitExceeded(t *testing.T) {
 	if action != actionError {
 		t.Errorf("action = %d, want %d (error)", action, actionError)
 	}
+
+	// Verify error message contains rate limit info
+	errorMsg := string(mock.writtenData[8:])
+	if !bytes.Contains(mock.writtenData[8:], []byte("rate limit exceeded")) {
+		t.Errorf("error message = %q, want to contain 'rate limit exceeded'", errorMsg)
+	}
 }
 
 func TestHandleAnnounce_PacketTooShort(t *testing.T) {
@@ -112,6 +129,12 @@ func TestHandleAnnounce_PacketTooShort(t *testing.T) {
 	action := binary.BigEndian.Uint32(mock.writtenData[0:4])
 	if action != actionError {
 		t.Errorf("action = %d, want %d", action, actionError)
+	}
+
+	// Verify error message
+	errorMsg := string(mock.writtenData[8:])
+	if !bytes.Contains(mock.writtenData[8:], []byte("invalid packet size")) {
+		t.Errorf("error message = %q, want to contain 'invalid packet size'", errorMsg)
 	}
 }
 
@@ -141,6 +164,12 @@ func TestHandleAnnounce_PortZero(t *testing.T) {
 	if action != actionError {
 		t.Errorf("action = %d, want %d", action, actionError)
 	}
+
+	// Verify error message
+	errorMsg := string(mock.writtenData[8:])
+	if !bytes.Contains(mock.writtenData[8:], []byte("port cannot be 0")) {
+		t.Errorf("error message = %q, want to contain 'port cannot be 0'", errorMsg)
+	}
 }
 
 func TestHandleAnnounce_IPv6WithNonZeroIPField(t *testing.T) {
@@ -165,6 +194,12 @@ func TestHandleAnnounce_IPv6WithNonZeroIPField(t *testing.T) {
 	action := binary.BigEndian.Uint32(mock.writtenData[0:4])
 	if action != actionError {
 		t.Errorf("action = %d, want %d", action, actionError)
+	}
+
+	// Verify error message
+	errorMsg := string(mock.writtenData[8:])
+	if !bytes.Contains(mock.writtenData[8:], []byte("IP address must be 0 for IPv6")) {
+		t.Errorf("error message = %q, want to contain 'IP address must be 0 for IPv6'", errorMsg)
 	}
 }
 
@@ -197,6 +232,8 @@ func TestHandleAnnounce_AddPeer(t *testing.T) {
 	if torrent == nil {
 		t.Fatal("torrent should be created")
 	}
+	torrent.mu.RLock()
+	defer torrent.mu.RUnlock()
 	if torrent.leechers != 1 {
 		t.Errorf("leechers = %d, want 1", torrent.leechers)
 	}
@@ -231,6 +268,8 @@ func TestHandleAnnounce_EventStopped(t *testing.T) {
 	}
 
 	torrent := tr.getTorrent(infoHash)
+	torrent.mu.RLock()
+	defer torrent.mu.RUnlock()
 	if torrent.leechers != 0 {
 		t.Errorf("leechers = %d, want 0 after stopped", torrent.leechers)
 	}
@@ -258,6 +297,8 @@ func TestHandleAnnounce_EventCompleted(t *testing.T) {
 	tr.handleAnnounce(conn, addr, packet, 12345)
 
 	torrent := tr.getTorrent(infoHash)
+	torrent.mu.RLock()
+	defer torrent.mu.RUnlock()
 	if torrent.seeders != 1 {
 		t.Errorf("seeders = %d, want 1", torrent.seeders)
 	}
@@ -605,7 +646,9 @@ func TestHandleAnnounce_IPv4WithCustomIP(t *testing.T) {
 	tr.handleAnnounce(conn, addr, packet, 12345)
 
 	torrent := tr.getTorrent(infoHash)
+	torrent.mu.RLock()
 	p := torrent.peers[peerID]
+	torrent.mu.RUnlock()
 	if p.IP.String() != "192.168.1.1" {
 		t.Errorf("peer IP = %s, want 192.168.1.1 (from packet)", p.IP)
 	}
@@ -799,6 +842,8 @@ func TestHandleAnnounce_SeederReannouncesAsSeeder(t *testing.T) {
 	tr.handleAnnounce(conn, addr, packet, 12346)
 
 	torrent := tr.getTorrent(infoHash)
+	torrent.mu.RLock()
+	defer torrent.mu.RUnlock()
 	if torrent.seeders != 1 {
 		t.Errorf("seeders = %d, want 1", torrent.seeders)
 	}
@@ -832,6 +877,8 @@ func TestHandleAnnounce_LeecherReannouncesAsLeecher(t *testing.T) {
 	tr.handleAnnounce(conn, addr, packet, 12346)
 
 	torrent := tr.getTorrent(infoHash)
+	torrent.mu.RLock()
+	defer torrent.mu.RUnlock()
 	if torrent.leechers != 1 {
 		t.Errorf("leechers = %d, want 1", torrent.leechers)
 	}
@@ -920,7 +967,9 @@ func TestHandleScrape_CompletedField(t *testing.T) {
 	torrent.addPeer(NewHashID([]byte("leecher1___________")), net.ParseIP("192.168.1.2"), 6881, 1000)
 
 	// Simulate completion (eventCompleted increments completed)
+	torrent.mu.Lock()
 	torrent.completed = 5
+	torrent.mu.Unlock()
 
 	packet := make([]byte, 36)
 	binary.BigEndian.PutUint64(packet[0:8], connID)
@@ -1053,6 +1102,43 @@ func TestHandleAnnounce_EventStarted(t *testing.T) {
 	tr.handleAnnounce(conn, addr, packet, 12345)
 
 	torrent := tr.getTorrent(infoHash)
+	torrent.mu.RLock()
+	defer torrent.mu.RUnlock()
+	if torrent.leechers != 1 {
+		t.Errorf("leechers = %d, want 1", torrent.leechers)
+	}
+}
+
+func TestHandleAnnounce_EventNone(t *testing.T) {
+	tr := setupTracker(t)
+	mock := &mockPacketConn{}
+	conn := mock
+	addr := &net.UDPAddr{IP: net.ParseIP("192.168.1.1"), Port: 6881}
+
+	connID := generateConnectionID(addr)
+	infoHash := NewHashID([]byte("torrent12345678901"))
+
+	// eventNone (0) is default - regular update, should add peer like eventStarted
+	packet := make([]byte, 98)
+	binary.BigEndian.PutUint64(packet[0:8], connID)
+	binary.BigEndian.PutUint32(packet[8:12], actionAnnounce)
+	binary.BigEndian.PutUint32(packet[12:16], 12345)
+	copy(packet[16:36], []byte("torrent12345678901"))
+	copy(packet[36:56], []byte("peer1_______________"))
+	binary.BigEndian.PutUint64(packet[64:72], 1000) // left > 0
+	binary.BigEndian.PutUint32(packet[80:84], eventNone)
+	binary.BigEndian.PutUint16(packet[96:98], 6881)
+
+	tr.handleAnnounce(conn, addr, packet, 12345)
+
+	action := binary.BigEndian.Uint32(mock.writtenData[0:4])
+	if action != actionAnnounce {
+		t.Fatalf("action = %d, want %d", action, actionAnnounce)
+	}
+
+	torrent := tr.getTorrent(infoHash)
+	torrent.mu.RLock()
+	defer torrent.mu.RUnlock()
 	if torrent.leechers != 1 {
 		t.Errorf("leechers = %d, want 1", torrent.leechers)
 	}
@@ -1092,5 +1178,223 @@ func TestHandleAnnounce_PeerIPPortEncoding(t *testing.T) {
 	}
 	if peerPortResp != 6889 {
 		t.Errorf("peer port = %d, want 6889", peerPortResp)
+	}
+}
+
+// Security tests
+
+func TestHandleAnnounce_InvalidConnectionID(t *testing.T) {
+	tr := setupTracker(t)
+	mock := &mockPacketConn{}
+	conn := mock
+	addr := &net.UDPAddr{IP: net.ParseIP("192.168.1.1"), Port: 6881}
+
+	// Create valid connection ID then modify it
+	validConnID := generateConnectionID(addr)
+	invalidConnID := validConnID ^ 0xFFFFFFFF // Flip all bits in signature
+
+	packet := make([]byte, 98)
+	binary.BigEndian.PutUint64(packet[0:8], invalidConnID)
+	binary.BigEndian.PutUint32(packet[8:12], actionAnnounce)
+	binary.BigEndian.PutUint32(packet[12:16], 12345)
+	copy(packet[16:36], []byte("torrent12345678901"))
+	copy(packet[36:56], []byte("peer1_______________"))
+	binary.BigEndian.PutUint16(packet[96:98], 6881)
+
+	tr.handlePacket(context.Background(), conn, addr, packet)
+
+	action := binary.BigEndian.Uint32(mock.writtenData[0:4])
+	if action != actionError {
+		t.Errorf("action = %d, want %d (error)", action, actionError)
+	}
+
+	errorMsg := string(mock.writtenData[8:])
+	if !bytes.Contains(mock.writtenData[8:], []byte("invalid connection ID")) {
+		t.Errorf("error message = %q, want to contain 'invalid connection ID'", errorMsg)
+	}
+}
+
+func TestHandleScrape_InvalidConnectionID(t *testing.T) {
+	tr := setupTracker(t)
+	mock := &mockPacketConn{}
+	conn := mock
+	addr := &net.UDPAddr{IP: net.ParseIP("192.168.1.1"), Port: 6881}
+
+	// Create valid connection ID then modify it
+	validConnID := generateConnectionID(addr)
+	invalidConnID := validConnID ^ 0xFFFFFFFF // Flip all bits in signature
+
+	packet := make([]byte, 36)
+	binary.BigEndian.PutUint64(packet[0:8], invalidConnID)
+	binary.BigEndian.PutUint32(packet[8:12], actionScrape)
+	binary.BigEndian.PutUint32(packet[12:16], 12345)
+	copy(packet[16:36], []byte("torrent12345678901"))
+
+	tr.handlePacket(context.Background(), conn, addr, packet)
+
+	action := binary.BigEndian.Uint32(mock.writtenData[0:4])
+	if action != actionError {
+		t.Errorf("action = %d, want %d (error)", action, actionError)
+	}
+}
+
+// Integration tests
+
+func TestFullFlow_ConnectAnnounceScrape(t *testing.T) {
+	tr := setupTracker(t)
+	mock := &mockPacketConn{}
+	conn := mock
+	addr := &net.UDPAddr{IP: net.ParseIP("192.168.1.1"), Port: 6881}
+	infoHash := NewHashID([]byte("torrent12345678901"))
+
+	// Step 1: Connect
+	connectPacket := make([]byte, 16)
+	binary.BigEndian.PutUint64(connectPacket[0:8], protocolID)
+	binary.BigEndian.PutUint32(connectPacket[8:12], actionConnect)
+	binary.BigEndian.PutUint32(connectPacket[12:16], 10001)
+
+	tr.handlePacket(context.Background(), conn, addr, connectPacket)
+
+	action := binary.BigEndian.Uint32(mock.writtenData[0:4])
+	if action != actionConnect {
+		t.Fatalf("connect failed: action = %d, want %d", action, actionConnect)
+	}
+	connectionID := binary.BigEndian.Uint64(mock.writtenData[8:16])
+	if connectionID == 0 {
+		t.Fatal("connection ID is zero")
+	}
+
+	// Step 2: Announce
+	mock.writtenData = nil
+	announcePacket := make([]byte, 98)
+	binary.BigEndian.PutUint64(announcePacket[0:8], connectionID)
+	binary.BigEndian.PutUint32(announcePacket[8:12], actionAnnounce)
+	binary.BigEndian.PutUint32(announcePacket[12:16], 10002)
+	copy(announcePacket[16:36], []byte("torrent12345678901"))
+	copy(announcePacket[36:56], []byte("peer1_______________"))
+	binary.BigEndian.PutUint64(announcePacket[64:72], 1000)
+	binary.BigEndian.PutUint16(announcePacket[96:98], 6881)
+
+	tr.handlePacket(context.Background(), conn, addr, announcePacket)
+
+	action = binary.BigEndian.Uint32(mock.writtenData[0:4])
+	if action != actionAnnounce {
+		t.Fatalf("announce failed: action = %d, want %d", action, actionAnnounce)
+	}
+
+	// Verify peer was added
+	torrent := tr.getTorrent(infoHash)
+	if torrent == nil {
+		t.Fatal("torrent not created")
+	}
+	torrent.mu.RLock()
+	if torrent.leechers != 1 {
+		t.Errorf("leechers = %d, want 1", torrent.leechers)
+	}
+	torrent.mu.RUnlock()
+
+	// Step 3: Scrape
+	mock.writtenData = nil
+	scrapePacket := make([]byte, 36)
+	binary.BigEndian.PutUint64(scrapePacket[0:8], connectionID)
+	binary.BigEndian.PutUint32(scrapePacket[8:12], actionScrape)
+	binary.BigEndian.PutUint32(scrapePacket[12:16], 10003)
+	copy(scrapePacket[16:36], []byte("torrent12345678901"))
+
+	tr.handlePacket(context.Background(), conn, addr, scrapePacket)
+
+	action = binary.BigEndian.Uint32(mock.writtenData[0:4])
+	if action != actionScrape {
+		t.Fatalf("scrape failed: action = %d, want %d", action, actionScrape)
+	}
+
+	seeders := binary.BigEndian.Uint32(mock.writtenData[8:12])
+	leechers := binary.BigEndian.Uint32(mock.writtenData[16:20])
+	if seeders != 0 || leechers != 1 {
+		t.Errorf("scrape result: seeders=%d, leechers=%d, want 0,1", seeders, leechers)
+	}
+
+	// Verify peer was added using infoHash
+	torrent = tr.getTorrent(infoHash)
+	if torrent == nil {
+		t.Fatal("torrent should exist")
+	}
+}
+
+func TestFullFlow_AnnounceWithPeerExchange(t *testing.T) {
+	tr := setupTracker(t)
+	mock := &mockPacketConn{}
+	addr1 := &net.UDPAddr{IP: net.ParseIP("192.168.1.1"), Port: 6881}
+	addr2 := &net.UDPAddr{IP: net.ParseIP("192.168.1.2"), Port: 6882}
+
+	// Peer 1 announces
+	connID1 := generateConnectionID(addr1)
+	packet1 := make([]byte, 98)
+	binary.BigEndian.PutUint64(packet1[0:8], connID1)
+	binary.BigEndian.PutUint32(packet1[8:12], actionAnnounce)
+	binary.BigEndian.PutUint32(packet1[12:16], 10001)
+	copy(packet1[16:36], []byte("torrent12345678901"))
+	copy(packet1[36:56], []byte("peer1_______________"))
+	binary.BigEndian.PutUint64(packet1[64:72], 1000)
+	binary.BigEndian.PutUint16(packet1[96:98], 6881)
+	tr.handleAnnounce(mock, addr1, packet1, 10001)
+
+	// Peer 2 announces and should get Peer 1 in response
+	mock.writtenData = nil
+	connID2 := generateConnectionID(addr2)
+	packet2 := make([]byte, 98)
+	binary.BigEndian.PutUint64(packet2[0:8], connID2)
+	binary.BigEndian.PutUint32(packet2[8:12], actionAnnounce)
+	binary.BigEndian.PutUint32(packet2[12:16], 10002)
+	copy(packet2[16:36], []byte("torrent12345678901"))
+	copy(packet2[36:56], []byte("peer2_______________"))
+	binary.BigEndian.PutUint64(packet2[64:72], 2000)
+	binary.BigEndian.PutUint16(packet2[96:98], 6882)
+	tr.handleAnnounce(mock, addr2, packet2, 10002)
+
+	action := binary.BigEndian.Uint32(mock.writtenData[0:4])
+	if action != actionAnnounce {
+		t.Fatalf("announce failed: action = %d, want %d", action, actionAnnounce)
+	}
+
+	// Verify Peer 2 received Peer 1 in response
+	peersLen := len(mock.writtenData) - 20
+	if peersLen != 6 { // 1 peer * 6 bytes
+		t.Errorf("peers length = %d, want 6", peersLen)
+	}
+
+	// Verify peer IP and port are correct
+	if peersLen >= 6 {
+		peerIP := net.IP(mock.writtenData[20:24])
+		peerPort := binary.BigEndian.Uint16(mock.writtenData[24:26])
+		if peerIP.String() != "192.168.1.1" {
+			t.Errorf("peer IP = %s, want 192.168.1.1", peerIP)
+		}
+		if peerPort != 6881 {
+			t.Errorf("peer port = %d, want 6881", peerPort)
+		}
+	}
+
+	// Verify stats include both peers
+	leechers := binary.BigEndian.Uint32(mock.writtenData[12:16])
+	if leechers != 2 {
+		t.Errorf("leechers in response = %d, want 2", leechers)
+	}
+}
+
+func TestSendError_WriteFailure(t *testing.T) {
+	tr := setupTracker(t)
+
+	// Create a mock that fails on write
+	failingMock := &mockFailingPacketConn{}
+	addr := &net.UDPAddr{IP: net.ParseIP("192.168.1.1"), Port: 6881}
+
+	// This should not panic even though WriteTo fails
+	// The sendError function should log the error but not panic
+	tr.sendError(failingMock, addr, 12345, "test error message")
+
+	// Verify no data was written (since WriteTo failed)
+	if len(failingMock.writtenData) != 0 {
+		t.Errorf("writtenData length = %d, want 0 (WriteTo failed)", len(failingMock.writtenData))
 	}
 }

@@ -118,3 +118,31 @@ func TestHashID_String(t *testing.T) {
 		}
 	})
 }
+
+func TestHashID_NewHashID_Under20Bytes(t *testing.T) {
+	t.Run("pads with zeros when less than 20 bytes", func(t *testing.T) {
+		data := []byte("short") // 5 bytes
+		h := NewHashID(data)
+
+		// First 5 bytes should match input
+		if !bytes.Equal(h[:5], data) {
+			t.Errorf("first 5 bytes = %v, want %v", h[:5], data)
+		}
+		// Remaining bytes should be zero
+		for i := 5; i < 20; i++ {
+			if h[i] != 0 {
+				t.Errorf("byte at index %d: expected 0x00, got 0x%02x", i, h[i])
+			}
+		}
+	})
+
+	t.Run("empty input produces all zeros", func(t *testing.T) {
+		h := NewHashID([]byte{})
+
+		for i := 0; i < 20; i++ {
+			if h[i] != 0 {
+				t.Errorf("byte at index %d: expected 0x00, got 0x%02x", i, h[i])
+			}
+		}
+	})
+}

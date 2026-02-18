@@ -168,44 +168,49 @@ func (tr *Tracker) sendError(conn net.PacketConn, addr *net.UDPAddr, transaction
 	}
 }
 
-// cleanupLoop periodically removes peers that haven't announced recently,
-// deletes torrents that become empty, and cleans up stale rate limiter entries
+// cleanupStalePeers removes peers that haven't announced recently and deletes
+// torrents that become empty. It also cleans up stale rate limiter entries.
+func (tr *Tracker) cleanupStalePeers() {
+	staleDeadline := time.Now().Add(-stalePeerThreshold * time.Minute)
+
+	tr.mu.Lock()
+	for hash, t := range tr.torrents {
+		t.mu.Lock()
+		for id, p := range t.peers {
+			if p.LastAnnounced.Before(staleDeadline) {
+				if p.Left == 0 {
+					t.seeders--
+				} else {
+					t.leechers--
+				}
+				delete(t.peers, id)
+				debug("cleanup: removed stale peer %s @ %s:%d", id.String(), p.IP, p.Port)
+			}
+		}
+		if len(t.peers) == 0 {
+			delete(tr.torrents, hash)
+			debug("cleanup: removed inactive torrent %s", hash.String())
+		}
+		t.mu.Unlock()
+	}
+	tr.mu.Unlock()
+
+	tr.rateLimiterMu.Lock()
+	rateLimitStaleDeadline := time.Now().Add(-rateLimitWindow * 2 * time.Minute) // 2 windows are definitely stale
+	for key, rl := range tr.rateLimiter {
+		if rl.windowStart.Before(rateLimitStaleDeadline) {
+			delete(tr.rateLimiter, key)
+		}
+	}
+	tr.rateLimiterMu.Unlock()
+}
+
+// cleanupLoop periodically runs cleanupStalePeers in a background goroutine
 func (tr *Tracker) cleanupLoop() {
 	ticker := time.NewTicker(cleanupInterval * time.Minute)
 	defer ticker.Stop()
 
 	for range ticker.C {
-		staleDeadline := time.Now().Add(-stalePeerThreshold * time.Minute)
-
-		tr.mu.Lock()
-		for hash, t := range tr.torrents {
-			t.mu.Lock()
-			for id, p := range t.peers {
-				if p.LastAnnounced.Before(staleDeadline) {
-					if p.Left == 0 {
-						t.seeders--
-					} else {
-						t.leechers--
-					}
-					delete(t.peers, id)
-					debug("cleanup: removed stale peer %s @ %s:%d", id.String(), p.IP, p.Port)
-				}
-			}
-			if len(t.peers) == 0 {
-				delete(tr.torrents, hash)
-				debug("cleanup: removed inactive torrent %s", hash.String())
-			}
-			t.mu.Unlock()
-		}
-		tr.mu.Unlock()
-
-		tr.rateLimiterMu.Lock()
-		rateLimitStaleDeadline := time.Now().Add(-rateLimitWindow * 2 * time.Minute) // 2 windows are definitely stale
-		for key, rl := range tr.rateLimiter {
-			if rl.windowStart.Before(rateLimitStaleDeadline) {
-				delete(tr.rateLimiter, key)
-			}
-		}
-		tr.rateLimiterMu.Unlock()
+		tr.cleanupStalePeers()
 	}
 }

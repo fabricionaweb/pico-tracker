@@ -92,6 +92,12 @@ func TestConnectionID_IPv6(t *testing.T) {
 }
 
 func TestValidateConnectionID_WrongSecret(t *testing.T) {
+	// Save original secretKey to restore after test
+	originalKey := secretKey
+	defer func() {
+		secretKey = originalKey
+	}()
+
 	h := sha256.New()
 	h.Write([]byte("secret-A"))
 	copy(secretKey[:], h.Sum(nil))
@@ -106,4 +112,36 @@ func TestValidateConnectionID_WrongSecret(t *testing.T) {
 	if validateConnectionID(id, addr) {
 		t.Error("validateConnectionID returned true for wrong secret")
 	}
+}
+
+func TestBufferPool(t *testing.T) {
+	t.Run("getBuffer returns buffer with sufficient capacity", func(t *testing.T) {
+		buf := getBuffer()
+		if buf == nil {
+			t.Fatal("getBuffer returned nil")
+		}
+		// Buffer should have at least maxPacketSize capacity
+		// (sync.Pool may return larger buffers from other tests)
+		if cap(*buf) < maxPacketSize {
+			t.Errorf("buffer capacity = %d, want at least %d", cap(*buf), maxPacketSize)
+		}
+		putBuffer(buf)
+	})
+
+	t.Run("putBuffer resets slice length", func(t *testing.T) {
+		buf := getBuffer()
+		*buf = append(*buf, []byte("some data")...)
+		if len(*buf) == 0 {
+			t.Error("buffer should have data before put")
+		}
+		putBuffer(buf)
+
+		// putBuffer should reset the slice to zero length
+		// Note: we can't reliably test getBuffer returns len=0 because
+		// other tests may put buffers back into the pool concurrently
+		if len(*buf) != 0 {
+			t.Errorf("buffer length after put = %d, want 0", len(*buf))
+		}
+	})
+
 }

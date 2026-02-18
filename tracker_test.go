@@ -3,6 +3,7 @@ package main
 import (
 	"net"
 	"testing"
+	"time"
 )
 
 func TestAddPeer_NewSeeder(t *testing.T) {
@@ -14,6 +15,8 @@ func TestAddPeer_NewSeeder(t *testing.T) {
 	peerID := NewHashID([]byte("peer1_______________"))
 	torrent.addPeer(peerID, net.ParseIP("192.168.1.1"), 6881, 0) // left=0 means seeder
 
+	torrent.mu.RLock()
+	defer torrent.mu.RUnlock()
 	if torrent.seeders != 1 {
 		t.Errorf("seeders = %d, want 1", torrent.seeders)
 	}
@@ -34,6 +37,8 @@ func TestAddPeer_NewLeecher(t *testing.T) {
 	peerID := NewHashID([]byte("peer1_______________"))
 	torrent.addPeer(peerID, net.ParseIP("192.168.1.1"), 6881, 1000) // left>0 means leecher
 
+	torrent.mu.RLock()
+	defer torrent.mu.RUnlock()
 	if torrent.seeders != 0 {
 		t.Errorf("seeders = %d, want 0", torrent.seeders)
 	}
@@ -55,6 +60,8 @@ func TestAddPeer_UpdateExisting(t *testing.T) {
 	torrent.addPeer(peerID, net.ParseIP("192.168.1.1"), 6881, 1000)
 	torrent.addPeer(peerID, net.ParseIP("192.168.1.2"), 6882, 500)
 
+	torrent.mu.RLock()
+	defer torrent.mu.RUnlock()
 	if torrent.seeders != 0 {
 		t.Errorf("seeders = %d, want 0", torrent.seeders)
 	}
@@ -81,6 +88,8 @@ func TestAddPeer_LeecherToSeeder(t *testing.T) {
 	torrent.addPeer(peerID, net.ParseIP("192.168.1.1"), 6881, 1000)
 	torrent.addPeer(peerID, net.ParseIP("192.168.1.1"), 6881, 0) // now complete
 
+	torrent.mu.RLock()
+	defer torrent.mu.RUnlock()
 	if torrent.seeders != 1 {
 		t.Errorf("seeders = %d, want 1", torrent.seeders)
 	}
@@ -102,6 +111,8 @@ func TestAddPeer_SeederToLeecher(t *testing.T) {
 	torrent.addPeer(peerID, net.ParseIP("192.168.1.1"), 6881, 0)
 	torrent.addPeer(peerID, net.ParseIP("192.168.1.1"), 6881, 1000) // re-announced with left>0
 
+	torrent.mu.RLock()
+	defer torrent.mu.RUnlock()
 	if torrent.seeders != 0 {
 		t.Errorf("seeders = %d, want 0", torrent.seeders)
 	}
@@ -120,6 +131,8 @@ func TestRemovePeer_Seeder(t *testing.T) {
 	torrent.addPeer(peerID, net.ParseIP("192.168.1.1"), 6881, 0)
 	torrent.removePeer(peerID)
 
+	torrent.mu.RLock()
+	defer torrent.mu.RUnlock()
 	if torrent.seeders != 0 {
 		t.Errorf("seeders = %d, want 0", torrent.seeders)
 	}
@@ -138,6 +151,8 @@ func TestRemovePeer_Leecher(t *testing.T) {
 	torrent.addPeer(peerID, net.ParseIP("192.168.1.1"), 6881, 1000)
 	torrent.removePeer(peerID)
 
+	torrent.mu.RLock()
+	defer torrent.mu.RUnlock()
 	if torrent.leechers != 0 {
 		t.Errorf("leechers = %d, want 0", torrent.leechers)
 	}
@@ -149,6 +164,8 @@ func TestRemovePeer_NonExistent(t *testing.T) {
 	peerID := NewHashID([]byte("nonexistent_________"))
 	torrent.removePeer(peerID) // should not panic
 
+	torrent.mu.RLock()
+	defer torrent.mu.RUnlock()
 	if torrent.seeders != 0 || torrent.leechers != 0 {
 		t.Error("counters changed for non-existent peer")
 	}
@@ -381,6 +398,41 @@ func TestCheckRateLimit_DifferentIPs(t *testing.T) {
 	}
 }
 
+func TestCheckRateLimit_WindowReset(t *testing.T) {
+	tr := &Tracker{
+		rateLimiter: make(map[string]*rateLimitEntry),
+	}
+
+	addr := &net.UDPAddr{IP: net.ParseIP("192.168.1.1"), Port: 6881}
+
+	// Use up all burst capacity
+	for i := 0; i < rateLimitBurst; i++ {
+		allowed, _ := tr.checkRateLimit(addr)
+		if !allowed {
+			t.Fatalf("request %d should be allowed", i+1)
+		}
+	}
+
+	// Manually set window start to past to simulate window expiration
+	tr.rateLimiterMu.Lock()
+	tr.rateLimiter[addr.String()].windowStart = time.Now().Add(-3 * time.Minute)
+	tr.rateLimiterMu.Unlock()
+
+	// Should be allowed after window expires
+	allowed, remaining := tr.checkRateLimit(addr)
+	if !allowed {
+		t.Errorf("should be allowed after window reset, remaining=%v", remaining)
+	}
+
+	// Verify counter was reset
+	tr.rateLimiterMu.Lock()
+	count := tr.rateLimiter[addr.String()].count
+	tr.rateLimiterMu.Unlock()
+	if count != 1 {
+		t.Errorf("count = %d, want 1 after window reset", count)
+	}
+}
+
 func TestAddPeer_SeederReannouncesAsSeeder(t *testing.T) {
 	tr := &Tracker{
 		torrents: make(map[HashID]*Torrent),
@@ -391,6 +443,8 @@ func TestAddPeer_SeederReannouncesAsSeeder(t *testing.T) {
 	torrent.addPeer(peerID, net.ParseIP("192.168.1.1"), 6881, 0) // first: seeder
 	torrent.addPeer(peerID, net.ParseIP("192.168.1.1"), 6881, 0) // re-announce: still seeder
 
+	torrent.mu.RLock()
+	defer torrent.mu.RUnlock()
 	if torrent.seeders != 1 {
 		t.Errorf("seeders = %d, want 1", torrent.seeders)
 	}
@@ -411,6 +465,8 @@ func TestGetPeers_NumWantExceedsAvailable(t *testing.T) {
 	requester := NewHashID([]byte("requester__________"))
 	peers, seeders, leechers := torrent.getPeers(requester, 100, true, 6) // ask for 100, only 2 exist
 
+	torrent.mu.RLock()
+	defer torrent.mu.RUnlock()
 	if len(peers) != 12 { // 2 peers * 6 bytes
 		t.Errorf("len(peers) = %d, want 12", len(peers))
 	}
@@ -419,5 +475,95 @@ func TestGetPeers_NumWantExceedsAvailable(t *testing.T) {
 	}
 	if seeders != 0 {
 		t.Errorf("seeders = %d, want 0", seeders)
+	}
+}
+
+func TestCleanupLoop_StalePeers(t *testing.T) {
+	tr := &Tracker{
+		torrents:    make(map[HashID]*Torrent),
+		rateLimiter: make(map[string]*rateLimitEntry),
+	}
+
+	// Create torrent with peers
+	torrent := tr.getOrCreateTorrent(NewHashID([]byte("12345678901234567890")))
+	peerID1 := NewHashID([]byte("peer1_______________"))
+	peerID2 := NewHashID([]byte("peer2_______________"))
+
+	// Add peers
+	torrent.addPeer(peerID1, net.ParseIP("192.168.1.1"), 6881, 1000)
+	torrent.addPeer(peerID2, net.ParseIP("192.168.1.2"), 6882, 0)
+
+	// Manually mark peer1 as stale (LastAnnounced > 60 minutes ago)
+	torrent.mu.Lock()
+	torrent.peers[peerID1].LastAnnounced = time.Now().Add(-70 * time.Minute)
+	torrent.mu.Unlock()
+
+	// Run cleanup
+	tr.cleanupStalePeers()
+
+	// Verify stale peer removed, active peer remains
+	torrent.mu.RLock()
+	defer torrent.mu.RUnlock()
+	if _, exists := torrent.peers[peerID1]; exists {
+		t.Error("stale peer should have been removed")
+	}
+	if _, exists := torrent.peers[peerID2]; !exists {
+		t.Error("active peer should still exist")
+	}
+	if torrent.leechers != 0 {
+		t.Errorf("leechers = %d, want 0", torrent.leechers)
+	}
+	if torrent.seeders != 1 {
+		t.Errorf("seeders = %d, want 1", torrent.seeders)
+	}
+}
+
+func TestCleanupLoop_RemovesEmptyTorrents(t *testing.T) {
+	tr := &Tracker{
+		torrents:    make(map[HashID]*Torrent),
+		rateLimiter: make(map[string]*rateLimitEntry),
+	}
+
+	hash := NewHashID([]byte("emptytorrent________"))
+	torrent := tr.getOrCreateTorrent(hash)
+
+	// Add and then remove peer to create empty torrent
+	peerID := NewHashID([]byte("peer1_______________"))
+	torrent.addPeer(peerID, net.ParseIP("192.168.1.1"), 6881, 1000)
+	torrent.removePeer(peerID)
+
+	// Run cleanup
+	tr.cleanupStalePeers()
+
+	// Empty torrent should be removed
+	tr.mu.RLock()
+	defer tr.mu.RUnlock()
+	if _, exists := tr.torrents[hash]; exists {
+		t.Error("empty torrent should have been removed")
+	}
+}
+
+func TestCleanupLoop_RateLimiter(t *testing.T) {
+	tr := &Tracker{
+		torrents:    make(map[HashID]*Torrent),
+		rateLimiter: make(map[string]*rateLimitEntry),
+	}
+
+	// Add stale rate limit entry
+	tr.rateLimiterMu.Lock()
+	tr.rateLimiter["192.168.1.1:6881"] = &rateLimitEntry{
+		count:       5,
+		windowStart: time.Now().Add(-5 * time.Minute),
+	}
+	tr.rateLimiterMu.Unlock()
+
+	// Run cleanup
+	tr.cleanupStalePeers()
+
+	// Stale entry should be removed (2 windows = 4 minutes)
+	tr.rateLimiterMu.Lock()
+	defer tr.rateLimiterMu.Unlock()
+	if len(tr.rateLimiter) != 0 {
+		t.Error("stale rate limiter entry should have been removed")
 	}
 }
