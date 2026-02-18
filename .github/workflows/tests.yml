@@ -12,13 +12,13 @@ jobs:
       matrix:
         include:
           - goarch: 386
-            docker_arch: i386
+            docker_arch: 386
           - goarch: amd64
-            docker_arch: x86_64
+            docker_arch: amd64
           - goarch: arm
-            docker_arch: arm
+            docker_arch: arm/v7
           - goarch: arm64
-            docker_arch: arm64v8
+            docker_arch: arm64/v8
           - goarch: mips64le
             docker_arch: mips64le
           - goarch: ppc64le
