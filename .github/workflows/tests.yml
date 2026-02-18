@@ -5,66 +5,47 @@ on:
   pull_request:
 
 jobs:
-  test:
-    runs-on: ${{ matrix.os }}
+  test-linux:
+    runs-on: ubuntu-latest
     strategy:
       fail-fast: false
       matrix:
         include:
-          - os: ubuntu-latest
-            goos: linux
-            goarch: 386
-          - os: ubuntu-latest
-            goos: linux
-            goarch: amd64
-          - os: ubuntu-latest
-            goos: linux
-            goarch: arm
-          - os: ubuntu-latest
-            goos: linux
-            goarch: arm64
-          - os: ubuntu-latest
-            goos: linux
-            goarch: mips
-          - os: ubuntu-latest
-            goos: linux
-            goarch: mipsle
-          - os: ubuntu-latest
-            goos: linux
-            goarch: mips64
-          - os: ubuntu-latest
-            goos: linux
-            goarch: mips64le
-          - os: ubuntu-latest
-            goos: linux
-            goarch: ppc64
-          - os: ubuntu-latest
-            goos: linux
-            goarch: ppc64le
-          - os: ubuntu-latest
-            goos: linux
-            goarch: riscv64
-          - os: ubuntu-latest
-            goos: linux
-            goarch: s390x
-          - os: ubuntu-latest
-            goos: linux
-            goarch: loong64
-          - os: macos-latest
-            goos: darwin
-            goarch: amd64
-          - os: macos-latest
-            goos: darwin
-            goarch: arm64
-          - os: windows-latest
-            goos: windows
-            goarch: 386
-          - os: windows-latest
-            goos: windows
-            goarch: amd64
-          - os: windows-latest
-            goos: windows
-            goarch: arm64
+          - goarch: 386
+            docker_arch: i386
+          - goarch: amd64
+            docker_arch: x86_64
+          - goarch: arm
+            docker_arch: armv7
+          - goarch: arm64
+            docker_arch: aarch64
+          - goarch: mips64le
+            docker_arch: mips64le
+          - goarch: ppc64le
+            docker_arch: ppc64le
+          - goarch: riscv64
+            docker_arch: riscv64
+          - goarch: s390x
+            docker_arch: s390x
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v6
+
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v3
+
+      - name: Run tests via QEMU
+        run: |
+          docker run --rm \
+            -v "$PWD:/app" \
+            -w /app \
+            --platform=linux/${{ matrix.docker_arch }} \
+            golang:1.23 \
+            go test -v ./...
+
+  test-darwin:
+    runs-on: macos-latest
     steps:
       - name: Checkout code
         uses: actions/checkout@v6
@@ -73,8 +54,20 @@ jobs:
         uses: actions/setup-go@v6
         with:
           go-version: '1.23'
-          goos: ${{ matrix.goos }}
-          goarch: ${{ matrix.goarch }}
+
+      - name: Run tests
+        run: go test -v ./...
+
+  test-windows:
+    runs-on: windows-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v6
+
+      - name: Set up Go
+        uses: actions/setup-go@v6
+        with:
+          go-version: '1.23'
 
       - name: Run tests
         run: go test -v ./...
