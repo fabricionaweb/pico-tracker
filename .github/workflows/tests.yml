@@ -5,67 +5,47 @@ on:
   pull_request:
 
 jobs:
-  test-linux:
+  # Linux: Test all architectures supported by golang:1.23 Docker image
+  linux:
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
       matrix:
-        include:
-          - goarch: 386
-            docker_arch: 386
-          - goarch: amd64
-            docker_arch: amd64
-          - goarch: arm
-            docker_arch: arm/v7
-          - goarch: arm64
-            docker_arch: arm64/v8
-          - goarch: mips64le
-            docker_arch: mips64le
-          - goarch: ppc64le
-            docker_arch: ppc64le
-          - goarch: s390x
-            docker_arch: s390x
-
+        platform:
+          - linux/386
+          - linux/amd64
+          - linux/arm/v7
+          - linux/arm64/v8
+          - linux/mips64le
+          - linux/ppc64le
+          - linux/s390x
     steps:
-      - name: Checkout code
-        uses: actions/checkout@v6
-
-      - name: Set up QEMU
-        uses: docker/setup-qemu-action@v3
-
-      - name: Run tests via QEMU
-        run: |
+      - uses: actions/checkout@v6
+      - uses: docker/setup-qemu-action@v3
+      - run: |
           docker run --rm \
             -v "$PWD:/app" \
             -w /app \
-            --platform=linux/${{ matrix.docker_arch }} \
+            --platform=${{ matrix.platform }} \
             golang:1.23 \
             go test -v ./...
 
-  test-darwin:
+  # macOS: Test natively (arm64 on Apple Silicon runners)
+  darwin:
     runs-on: macos-latest
     steps:
-      - name: Checkout code
-        uses: actions/checkout@v6
-
-      - name: Set up Go
-        uses: actions/setup-go@v6
+      - uses: actions/checkout@v6
+      - uses: actions/setup-go@v6
         with:
           go-version: '1.23'
+      - run: go test -v ./...
 
-      - name: Run tests
-        run: go test -v ./...
-
-  test-windows:
+  # Windows: Test natively (amd64 only - no 386/arm64 runners available)
+  windows:
     runs-on: windows-latest
     steps:
-      - name: Checkout code
-        uses: actions/checkout@v6
-
-      - name: Set up Go
-        uses: actions/setup-go@v6
+      - uses: actions/checkout@v6
+      - uses: actions/setup-go@v6
         with:
           go-version: '1.23'
-
-      - name: Run tests
-        run: go test -v ./...
+      - run: go test -v ./...
