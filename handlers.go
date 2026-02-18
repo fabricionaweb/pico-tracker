@@ -182,10 +182,8 @@ func (tr *Tracker) handleScrape(conn *net.UDPConn, addr *net.UDPAddr, packet []b
 // based on the action field. Connection ID validation is performed for announce/scrape
 // Packet header format: [connection_id:8][action:4][transaction_id:4]
 func (tr *Tracker) handlePacket(ctx context.Context, conn *net.UDPConn, addr *net.UDPAddr, packet []byte) {
-	select {
-	case <-ctx.Done():
+	if ctx.Err() != nil {
 		return
-	default:
 	}
 
 	if len(packet) < 16 {
@@ -241,26 +239,27 @@ func (tr *Tracker) handlePacket(ctx context.Context, conn *net.UDPConn, addr *ne
 
 // listen reads incoming UDP packets and dispatches them to handlers in goroutines
 func (tr *Tracker) listen(ctx context.Context, conn *net.UDPConn) {
-	readBuf := getBuffer()
-
 	for {
-		select {
-		case <-ctx.Done():
-			putBuffer(readBuf)
-			return
-		default:
-		}
+		readBuf := getBuffer()
 
 		n, clientAddr, err := conn.ReadFromUDP(*readBuf)
 		if err != nil {
+			putBuffer(readBuf)
+			if ctx.Err() != nil {
+				return
+			}
+
 			log.Printf("[ERROR] Failed to read UDP packet: %v", err)
+			continue
+		}
+
+		if n == 0 {
 			putBuffer(readBuf)
 			continue
 		}
 
 		packet := make([]byte, n)
 		copy(packet, (*readBuf)[:n])
-
 		putBuffer(readBuf)
 
 		tr.wg.Add(1)
@@ -268,7 +267,5 @@ func (tr *Tracker) listen(ctx context.Context, conn *net.UDPConn) {
 			defer tr.wg.Done()
 			tr.handlePacket(ctx, conn, clientAddr, packet)
 		}()
-
-		readBuf = getBuffer()
 	}
 }
