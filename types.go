@@ -43,8 +43,7 @@ type Tracker struct {
 	torrents map[HashID]*Torrent // key is info_hash
 	wg       sync.WaitGroup      // tracks in-flight request handlers
 
-	// Rate limiting for connect requests (per IP:Port)
-	rateLimiterMu sync.RWMutex
+	rateLimiterMu sync.Mutex
 	rateLimiter   map[string]*rateLimitEntry // key is "IP:port"
 }
 

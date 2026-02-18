@@ -116,21 +116,15 @@ func (t *Torrent) removePeer(id HashID) {
 
 // getPeers returns a list of peers for a client to connect to
 // Returns up to numWant peers matching the client's IP version (not including requesting peer)
-func (t *Torrent) getPeers(exclude HashID, numWant int, clientIP net.IP) (peers []byte, seeders, leechers int) {
+func (t *Torrent) getPeers(exclude HashID, numWant int, clientIsV4 bool, peerSize int) (peers []byte, seeders, leechers int) {
 	t.mu.RLock()
 	defer t.mu.RUnlock()
 
 	seeders, leechers = t.seeders, t.leechers
-	wantV4Peers := clientIP.To4() != nil
 
-	// Collect matching peers in single pass
 	var peerIDs []HashID
 	for id, p := range t.peers {
-		if id == exclude {
-			continue
-		}
-		isV4Peer := p.IP.To4() != nil
-		if isV4Peer == wantV4Peers {
+		if id != exclude && (p.IP.To4() != nil) == clientIsV4 {
 			peerIDs = append(peerIDs, id)
 		}
 	}
@@ -139,19 +133,16 @@ func (t *Torrent) getPeers(exclude HashID, numWant int, clientIP net.IP) (peers 
 		return nil, seeders, leechers
 	}
 
-	// Limit to available peers
-	numPeers := numWant
-	if numPeers > len(peerIDs) {
-		numPeers = len(peerIDs)
-	}
+	numPeers := min(numWant, len(peerIDs))
+	peers = make([]byte, 0, numPeers*peerSize)
 
 	// Start at random offset for fair peer distribution across clients
 	start := rand.Intn(len(peerIDs))
-	for i := 0; i < numPeers; i++ {
+	for i := range numPeers {
 		idx := (start + i) % len(peerIDs)
 		p := t.peers[peerIDs[idx]]
 
-		if wantV4Peers {
+		if clientIsV4 {
 			peers = append(peers, p.IP.To4()...)
 		} else {
 			peers = append(peers, p.IP.To16()...)
@@ -183,21 +174,12 @@ func (tr *Tracker) cleanupLoop() {
 	ticker := time.NewTicker(cleanupInterval * time.Minute)
 	defer ticker.Stop()
 
-	staleThreshold := stalePeerThreshold * time.Minute
-	rateLimitStaleThreshold := rateLimitWindow * 2 * time.Minute // 2 windows are definitely stale
-	var rateLimitStaleDeadline time.Time
-
 	for range ticker.C {
-		// clean peers (read lock allows concurrent access)
-		staleDeadline := time.Now().Add(-staleThreshold)
-		tr.mu.RLock()
+		staleDeadline := time.Now().Add(-stalePeerThreshold * time.Minute)
 
-		var toDelete []HashID
-		removedPeers := 0
-
+		tr.mu.Lock()
 		for hash, t := range tr.torrents {
 			t.mu.Lock()
-
 			for id, p := range t.peers {
 				if p.LastAnnounced.Before(staleDeadline) {
 					if p.Left == 0 {
@@ -206,52 +188,24 @@ func (tr *Tracker) cleanupLoop() {
 						t.leechers--
 					}
 					delete(t.peers, id)
-					removedPeers++
-					debug("cleanup: removed stale peer %s @ %s:%d (last seen %s ago)",
-						id.String(), p.IP, p.Port, time.Since(p.LastAnnounced).Round(time.Minute))
+					debug("cleanup: removed stale peer %s @ %s:%d", id.String(), p.IP, p.Port)
 				}
 			}
-
 			if len(t.peers) == 0 {
-				toDelete = append(toDelete, hash)
+				delete(tr.torrents, hash)
+				debug("cleanup: removed inactive torrent %s", hash.String())
 			}
 			t.mu.Unlock()
 		}
-		tr.mu.RUnlock()
+		tr.mu.Unlock()
 
-		// delete empty torrents (write lock, re-check to avoid race)
-		removedTorrents := 0
-		if len(toDelete) > 0 {
-			tr.mu.Lock()
-			for _, hash := range toDelete {
-				if t, ok := tr.torrents[hash]; ok {
-					t.mu.Lock()
-					if len(t.peers) == 0 {
-						delete(tr.torrents, hash)
-						removedTorrents++
-						debug("cleanup: removed inactive torrent %s", hash.String())
-					}
-					t.mu.Unlock()
-				}
-			}
-			tr.mu.Unlock()
-		}
-
-		// clean rate limiter
 		tr.rateLimiterMu.Lock()
-		rateLimitStaleDeadline = time.Now().Add(-rateLimitStaleThreshold)
-		removedRateLimits := 0
+		rateLimitStaleDeadline := time.Now().Add(-rateLimitWindow * 2 * time.Minute) // 2 windows are definitely stale
 		for key, rl := range tr.rateLimiter {
 			if rl.windowStart.Before(rateLimitStaleDeadline) {
 				delete(tr.rateLimiter, key)
-				removedRateLimits++
 			}
 		}
 		tr.rateLimiterMu.Unlock()
-
-		if removedPeers > 0 || removedTorrents > 0 || removedRateLimits > 0 {
-			info("cleanup: removed %d stale peers, %d inactive torrents, %d rate limit entries",
-				removedPeers, removedTorrents, removedRateLimits)
-		}
 	}
 }

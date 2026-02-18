@@ -111,9 +111,8 @@ func (tr *Tracker) handleAnnounce(conn *net.UDPConn, addr *net.UDPAddr, packet [
 		torrent.addPeer(peerID, clientIP, port, left)
 	}
 
-	peers, seeders, leechers := torrent.getPeers(peerID, numWant, clientIP)
-	peerCount := len(peers) / peerSize
-	debug("returning %d seeders, %d leechers, %d peers", seeders, leechers, peerCount)
+	peers, seeders, leechers := torrent.getPeers(peerID, numWant, clientIsV4, peerSize)
+	debug("returning %d seeders, %d leechers, %d peers", seeders, leechers, len(peers)/peerSize)
 
 	// Announce response format: [action:4][transaction_id:4][interval:4][leechers:4][seeders:4][peers:variable]
 	// Fixed header: 4 + 4 + 4 + 4 + 4 = 20 bytes
@@ -147,12 +146,14 @@ func (tr *Tracker) handleScrape(conn *net.UDPConn, addr *net.UDPAddr, packet []b
 
 	// Scrape response format: [action:4][transaction_id:4] + [seeders:4][completed:4][leechers:4] per hash
 	// Fixed header: 4 + 4 = 8 bytes
-	response := make([]byte, 8, 8+numHashes*12)
+	scrapeResponseSize := 8 + numHashes*12
+	response := make([]byte, scrapeResponseSize)
 	binary.BigEndian.PutUint32(response[0:4], actionScrape)
 	binary.BigEndian.PutUint32(response[4:8], transactionID)
 
-	for offset := 16; offset+20 <= len(packet); offset += 20 {
-		infoHash := NewHashID(packet[offset : offset+20])
+	offset := 8
+	for i := range numHashes {
+		infoHash := NewHashID(packet[16+i*20 : 16+(i+1)*20])
 
 		var seeders, completed, leechers uint32
 		torrent := tr.getTorrent(infoHash)
@@ -164,9 +165,10 @@ func (tr *Tracker) handleScrape(conn *net.UDPConn, addr *net.UDPAddr, packet []b
 			torrent.mu.RUnlock()
 		}
 
-		response = binary.BigEndian.AppendUint32(response, seeders)
-		response = binary.BigEndian.AppendUint32(response, completed)
-		response = binary.BigEndian.AppendUint32(response, leechers)
+		binary.BigEndian.PutUint32(response[offset:offset+4], seeders)
+		binary.BigEndian.PutUint32(response[offset+4:offset+8], completed)
+		binary.BigEndian.PutUint32(response[offset+8:offset+12], leechers)
+		offset += 12
 
 		debug("scrape for %s: seeders=%d completed=%d leechers=%d", infoHash.String(), seeders, completed, leechers)
 	}
@@ -226,7 +228,9 @@ func (tr *Tracker) handlePacket(ctx context.Context, conn *net.UDPConn, addr *ne
 	default:
 		// tr.sendError will add debug and skip debug for loopback (healthcheck)
 		if fromLoopback {
-			conn.WriteToUDP([]byte("unknown action\n"), addr)
+			if _, err := conn.WriteToUDP([]byte("unknown action\n"), addr); err != nil {
+				debug("failed to respond to loopback: %v", err)
+			}
 			return
 		}
 
@@ -237,28 +241,34 @@ func (tr *Tracker) handlePacket(ctx context.Context, conn *net.UDPConn, addr *ne
 
 // listen reads incoming UDP packets and dispatches them to handlers in goroutines
 func (tr *Tracker) listen(ctx context.Context, conn *net.UDPConn) {
-	buffer := make([]byte, maxPacketSize)
+	readBuf := getBuffer()
 
 	for {
 		select {
 		case <-ctx.Done():
+			putBuffer(readBuf)
 			return
 		default:
 		}
 
-		n, clientAddr, err := conn.ReadFromUDP(buffer)
+		n, clientAddr, err := conn.ReadFromUDP(*readBuf)
 		if err != nil {
 			log.Printf("[ERROR] Failed to read UDP packet: %v", err)
+			putBuffer(readBuf)
 			continue
 		}
 
 		packet := make([]byte, n)
-		copy(packet, buffer[:n])
+		copy(packet, (*readBuf)[:n])
+
+		putBuffer(readBuf)
 
 		tr.wg.Add(1)
 		go func() {
 			defer tr.wg.Done()
 			tr.handlePacket(ctx, conn, clientAddr, packet)
 		}()
+
+		readBuf = getBuffer()
 	}
 }

@@ -5,10 +5,28 @@ import (
 	"crypto/sha256"
 	"encoding/binary"
 	"net"
+	"sync"
 	"time"
 )
 
 var secretKey [32]byte // secret for syn-cookie connection ID signing (prevents IP spoofing)
+
+// bufferPool reuses 1500-byte read buffers to reduce allocations and GC pressure
+var bufferPool = sync.Pool{
+	New: func() any {
+		buf := make([]byte, maxPacketSize)
+		return &buf
+	},
+}
+
+func getBuffer() *[]byte {
+	return bufferPool.Get().(*[]byte)
+}
+
+func putBuffer(buf *[]byte) {
+	*buf = (*buf)[:0]
+	bufferPool.Put(buf)
+}
 
 // Protocol constants for the UDP Tracker Protocol (BEP 15)
 // https://bittorrent.org/beps/bep_0015.html
