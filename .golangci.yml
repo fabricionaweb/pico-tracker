@@ -25,9 +25,6 @@ linters-settings:
   gocyclo:
     min-complexity: 15
   
-  maligned:
-    suggest-new: true
-  
   dupl:
     threshold: 100
   
@@ -82,10 +79,6 @@ linters:
     - unused
     - whitespace
   
-  disable:
-    # Disabled because they are noisy or not applicable
-    
-    
   fast: false
 
 issues:
