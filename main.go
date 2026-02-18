@@ -16,7 +16,9 @@ import (
 
 var version = "dev"
 
-var debugMode = os.Getenv("DEBUG") != ""
+var debugMode bool
+
+var fallbackSecret = "pico-tracker-default-secret-do-not-use-in-production"
 
 func debug(format string, v ...any) {
 	if debugMode {
@@ -28,45 +30,83 @@ func info(format string, v ...any) {
 	log.Printf("[INFO] "+format, v...)
 }
 
-func main() {
+type config struct {
+	port        int
+	secret      string
+	showVersion bool
+}
+
+// parseFlags parses command-line flags and returns configuration.
+// Default values are read from environment variables:
+//   - PICO_TRACKER__PORT: default port (must be > 0)
+//   - PICO_TRACKER__SECRET: secret key for connection ID signing
+//   - DEBUG: enables debug mode if set
+func parseFlags(args []string) *config {
 	defaultPort := 1337
 	if p, err := strconv.Atoi(os.Getenv("PICO_TRACKER__PORT")); err == nil && p > 0 {
 		defaultPort = p
 	}
 
 	defaultSecret := os.Getenv("PICO_TRACKER__SECRET")
-
-	flag.Usage = func() {
-		fmt.Fprintf(os.Stderr, "Pico Tracker: %s\nPortable BitTorrent Tracker (UDP)\n\n", version)
-		flag.PrintDefaults()
+	if defaultSecret == "" {
+		defaultSecret = fallbackSecret
 	}
 
-	port := flag.Int("port", defaultPort, "port to listen on")
-	flag.IntVar(port, "p", defaultPort, "alias to -port")
-	secret := flag.String("secret", defaultSecret, "secret key for connection ID signing")
-	flag.StringVar(secret, "s", defaultSecret, "alias to -secret")
-	flag.BoolVar(&debugMode, "debug", debugMode, "enable debug logs")
-	flag.BoolVar(&debugMode, "d", debugMode, "alias to -debug")
-	showVersion := flag.Bool("version", false, "print version")
-	flag.BoolVar(showVersion, "v", false, "alias to -version")
-	flag.Parse()
+	debugDefault := os.Getenv("DEBUG") != ""
 
-	if *showVersion {
+	fs := flag.NewFlagSet("pico-tracker", flag.ExitOnError)
+	port := fs.Int("port", defaultPort, "port to listen on [env PICO_TRACKER__PORT]")
+	fs.IntVar(port, "p", defaultPort, "alias to -port")
+
+	secret := fs.String("secret", "", "secret key for connection ID signing [env PICO_TRACKER__SECRET]")
+	fs.StringVar(secret, "s", "", "alias to -secret")
+
+	debug := fs.Bool("debug", debugDefault, "enable debug logs [env DEBUG]")
+	fs.BoolVar(debug, "d", debugDefault, "alias to -debug")
+
+	showVersion := fs.Bool("version", false, "print version")
+	fs.BoolVar(showVersion, "v", false, "alias to -version")
+
+	fs.Usage = func() {
+		fmt.Fprintf(os.Stderr, "\nPico Tracker: %s\nPortable BitTorrent Tracker (UDP)\n\n", version)
+		fs.PrintDefaults()
+		fmt.Fprintf(os.Stderr, "\n")
+	}
+
+	// With ExitOnError, flag package exits on error
+	_ = fs.Parse(args)
+
+	debugMode = *debug
+
+	// Apply default secret later if not provided (hides from -help output)
+	if *secret == "" {
+		*secret = defaultSecret
+	}
+
+	return &config{
+		port:        *port,
+		secret:      *secret,
+		showVersion: *showVersion,
+	}
+}
+
+func main() {
+	cfg := parseFlags(os.Args[1:])
+
+	if cfg.showVersion {
 		fmt.Println(version)
 		os.Exit(0)
 	}
-
-	secretStr := *secret
-	if secretStr == "" {
-		secretStr = "pico-tracker-default-secret-do-not-use-in-production"
-		log.Printf("[WARN] Using insecure default secret key. Set PICO_TRACKER__SECRET or -secret for production use")
+	if cfg.secret == fallbackSecret {
+		log.Printf("[WARN] Using insecure default secret key. Set -secret or PICO_TRACKER__SECRET for production use")
 	}
-	h := sha256.New()
-	h.Write([]byte(secretStr))
-	copy(secretKey[:], h.Sum(nil))
 
-	debug("Debug mode is enabled")
 	info("Starting Pico Tracker: %s", version)
+	debug("Debug mode is enabled")
+
+	h := sha256.New()
+	h.Write([]byte(cfg.secret))
+	copy(secretKey[:], h.Sum(nil))
 
 	tr := &Tracker{
 		torrents:    make(map[HashID]*Torrent),
@@ -74,18 +114,18 @@ func main() {
 	}
 	go tr.cleanupLoop()
 
-	conn4, err := net.ListenUDP("udp4", &net.UDPAddr{IP: net.ParseIP("0.0.0.0"), Port: *port})
+	conn4, err := net.ListenUDP("udp4", &net.UDPAddr{IP: net.ParseIP("0.0.0.0"), Port: cfg.port})
 	if err != nil {
 		log.Fatalf("[ERROR] Failed to listen on IPv4: %v", err)
 	}
-	info("UDP Tracker listening on 0.0.0.0:%d (IPv4)", *port)
+	info("UDP Tracker listening on 0.0.0.0:%d (IPv4)", cfg.port)
 
 	// IPv6 is optional - if it fails, the tracker still works with IPv4 only
-	conn6, err := net.ListenUDP("udp6", &net.UDPAddr{IP: net.ParseIP("::"), Port: *port})
+	conn6, err := net.ListenUDP("udp6", &net.UDPAddr{IP: net.ParseIP("::"), Port: cfg.port})
 	if err != nil {
 		log.Printf("[WARN] IPv6 not available: %v", err)
 	} else {
-		info("UDP Tracker listening on [::]:%d (IPv6)", *port)
+		info("UDP Tracker listening on [::]:%d (IPv6)", cfg.port)
 	}
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
