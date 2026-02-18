@@ -20,6 +20,7 @@ var bufferPool = sync.Pool{
 }
 
 func getBuffer() *[]byte {
+	//nolint:errcheck // Buffer pool always returns *[]byte
 	return bufferPool.Get().(*[]byte)
 }
 
@@ -62,6 +63,7 @@ const (
 // Connection ID format: [32-bit timestamp][32-bit signature]
 // Signature = HMAC-SHA256(secret_key, client_ip + timestamp)[0:4]
 func generateConnectionID(addr *net.UDPAddr) uint64 {
+	//nolint:gosec // Intentionally truncating to 32-bit for protocol
 	timestamp := uint32(time.Now().Unix())
 	mac := hmac.New(sha256.New, secretKey[:])
 	mac.Write(addr.IP.To16())
@@ -75,6 +77,7 @@ func generateConnectionID(addr *net.UDPAddr) uint64 {
 
 // validateConnectionID verifies the syn-cookie signature and checks expiration
 func validateConnectionID(id uint64, addr *net.UDPAddr) bool {
+	//nolint:gosec // Intentionally extracting lower 32 bits for protocol
 	timestamp := uint32(id >> 32)
 	expiration := 2 * time.Minute // 2 minutes per BEP 15
 
@@ -89,5 +92,6 @@ func validateConnectionID(id uint64, addr *net.UDPAddr) bool {
 	mac.Write(tsBytes[:])
 	expected := binary.BigEndian.Uint32(mac.Sum(nil)[:4])
 
+	//nolint:gosec,gocritic // Intentionally comparing lower 32 bits
 	return uint32(id) == expected
 }

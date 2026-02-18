@@ -12,8 +12,9 @@ import (
 // Used as map keys to avoid 40-byte hex string overhead (saves 20 bytes per key)
 type HashID [20]byte
 
-// Caller must ensure b has at least 20 bytes (packet validation happens before this)
-// If b > 20 bytes, only the first 20 are used
+// NewHashID creates a HashID from a byte slice.
+// Caller must ensure b has at least 20 bytes (packet validation happens before this).
+// If b > 20 bytes, only the first 20 are used.
 func NewHashID(b []byte) HashID {
 	var h HashID
 	copy(h[:], b)
@@ -25,31 +26,30 @@ func (h HashID) String() string {
 }
 
 type Peer struct {
+	LastAnnounced time.Time
 	IP            net.IP
+	Left          uint64
 	Port          uint16
-	Left          uint64    // 0 = seeder, >0 = leecher
-	Completed     bool      // true if peer has completed this torrent
-	LastAnnounced time.Time // last time this peer announced (for stale cleanup)
+	Completed     bool
 }
 
 type Torrent struct {
+	peers     map[HashID]*Peer
 	mu        sync.RWMutex
-	peers     map[HashID]*Peer // key is peer_id
 	seeders   int
 	leechers  int
-	completed int // total completions (peers who finished downloading)
+	completed int
 }
 
 type Tracker struct {
-	mu       sync.RWMutex
-	torrents map[HashID]*Torrent // key is info_hash
-	wg       sync.WaitGroup      // tracks in-flight request handlers
-
+	torrents      map[HashID]*Torrent
+	rateLimiter   map[string]*rateLimitEntry
+	wg            sync.WaitGroup
+	mu            sync.RWMutex
 	rateLimiterMu sync.Mutex
-	rateLimiter   map[string]*rateLimitEntry // key is "IP:port"
 }
 
 type rateLimitEntry struct {
-	count       int       // requests in current window
-	windowStart time.Time // start of current 2-minute window
+	windowStart time.Time
+	count       int
 }

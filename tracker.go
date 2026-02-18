@@ -41,23 +41,23 @@ func (tr *Tracker) checkRateLimit(addr *net.UDPAddr) (allowed bool, timeRemainin
 	return false, window - elapsed
 }
 
-func (t *Tracker) getOrCreateTorrent(hash HashID) *Torrent {
-	t.mu.Lock()
-	defer t.mu.Unlock()
+func (tr *Tracker) getOrCreateTorrent(hash HashID) *Torrent {
+	tr.mu.Lock()
+	defer tr.mu.Unlock()
 
-	if _, ok := t.torrents[hash]; !ok {
-		t.torrents[hash] = &Torrent{peers: make(map[HashID]*Peer)}
+	if _, ok := tr.torrents[hash]; !ok {
+		tr.torrents[hash] = &Torrent{peers: make(map[HashID]*Peer)}
 		info("created new torrent %s", hash.String())
 	}
 
-	return t.torrents[hash]
+	return tr.torrents[hash]
 }
 
-func (t *Tracker) getTorrent(hash HashID) *Torrent {
-	t.mu.RLock()
-	defer t.mu.RUnlock()
+func (tr *Tracker) getTorrent(hash HashID) *Torrent {
+	tr.mu.RLock()
+	defer tr.mu.RUnlock()
 
-	return t.torrents[hash]
+	return tr.torrents[hash]
 }
 
 func (t *Torrent) addPeer(id HashID, ip net.IP, port uint16, left uint64) {
@@ -116,7 +116,9 @@ func (t *Torrent) removePeer(id HashID) {
 
 // getPeers returns a list of peers for a client to connect to
 // Returns up to numWant peers matching the client's IP version (not including requesting peer)
-func (t *Torrent) getPeers(exclude HashID, numWant int, clientIsV4 bool, peerSize int) (peers []byte, seeders, leechers int) {
+func (t *Torrent) getPeers(
+	exclude HashID, numWant int, clientIsV4 bool, peerSize int,
+) (peers []byte, seeders, leechers int) {
 	t.mu.RLock()
 	defer t.mu.RUnlock()
 
@@ -137,6 +139,7 @@ func (t *Torrent) getPeers(exclude HashID, numWant int, clientIsV4 bool, peerSiz
 	peers = make([]byte, 0, numPeers*peerSize)
 
 	// Start at random offset for fair peer distribution across clients
+	//nolint:gosec // crypto/rand not needed for peer selection
 	start := rand.Intn(len(peerIDs))
 	for i := range numPeers {
 		idx := (start + i) % len(peerIDs)

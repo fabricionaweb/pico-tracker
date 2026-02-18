@@ -20,7 +20,8 @@ func (tr *Tracker) handleConnect(conn net.PacketConn, addr *net.UDPAddr, transac
 
 	if allowed, remaining := tr.checkRateLimit(addr); !allowed {
 		debug("rate limited connect request from %s, wait %v", addr, remaining)
-		tr.sendError(conn, addr, transactionID, fmt.Sprintf("rate limit exceeded, try again in %v", remaining.Round(time.Second)))
+		msg := fmt.Sprintf("rate limit exceeded, try again in %v", remaining.Round(time.Second))
+		tr.sendError(conn, addr, transactionID, msg)
 		return
 	}
 
@@ -77,6 +78,7 @@ func (tr *Tracker) handleAnnounce(conn net.PacketConn, addr *net.UDPAddr, packet
 	numWant := defaultNumWant
 	// num_want 0 or 0xFFFFFFFF (-1 but we have it unsigned 32bit) means "default"
 	if numWantRaw != 0 && numWantRaw != 0xFFFFFFFF {
+		// #nosec G115 -- numWantRaw is validated as <= maxWant before this
 		if numWantRaw > uint32(maxWant) {
 			numWant = maxWant
 		} else {
@@ -105,8 +107,6 @@ func (tr *Tracker) handleAnnounce(conn net.PacketConn, addr *net.UDPAddr, packet
 		torrent.removePeer(peerID)
 	case eventCompleted:
 		torrent.addPeer(peerID, clientIP, port, 0)
-	case eventStarted, eventNone:
-		fallthrough
 	default:
 		torrent.addPeer(peerID, clientIP, port, left)
 	}
@@ -120,8 +120,11 @@ func (tr *Tracker) handleAnnounce(conn net.PacketConn, addr *net.UDPAddr, packet
 	binary.BigEndian.PutUint32(response[0:4], actionAnnounce)
 	binary.BigEndian.PutUint32(response[4:8], transactionID)
 	interval := announceInterval * int(time.Minute/time.Second)
+	//nolint:gosec // interval is bounded by constants
 	binary.BigEndian.PutUint32(response[8:12], uint32(interval))
+	//nolint:gosec // leechers/seeders are bounded counts
 	binary.BigEndian.PutUint32(response[12:16], uint32(leechers))
+	//nolint:gosec // seeders are bounded counts
 	binary.BigEndian.PutUint32(response[16:20], uint32(seeders))
 	copy(response[20:], peers)
 
@@ -159,8 +162,11 @@ func (tr *Tracker) handleScrape(conn net.PacketConn, addr *net.UDPAddr, packet [
 		torrent := tr.getTorrent(infoHash)
 		if torrent != nil {
 			torrent.mu.RLock()
+			//nolint:gosec // seeders/leechers/completed are bounded int counts
 			seeders = uint32(torrent.seeders)
+			//nolint:gosec // seeders/leechers/completed are bounded int counts
 			completed = uint32(torrent.completed)
+			//nolint:gosec // seeders/leechers/completed are bounded int counts
 			leechers = uint32(torrent.leechers)
 			torrent.mu.RUnlock()
 		}

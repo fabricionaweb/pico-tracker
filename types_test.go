@@ -11,7 +11,7 @@ func TestHashID_NewHashID(t *testing.T) {
 		data := []byte("12345678901234567890") // 20 bytes
 		h := NewHashID(data)
 
-		if !bytes.Equal(h[:], []byte(data)) {
+		if !bytes.Equal(h[:], data) {
 			t.Errorf("expected %v, got %v", data, h[:])
 		}
 	})

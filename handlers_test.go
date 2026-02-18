@@ -14,7 +14,6 @@ import (
 // mockPacketConn implements net.PacketConn for testing without real UDP sockets
 type mockPacketConn struct {
 	localAddr   net.Addr
-	remoteAddr  net.UDPAddr
 	writtenData []byte
 }
 
@@ -154,9 +153,9 @@ func TestHandleAnnounce_PortZero(t *testing.T) {
 	binary.BigEndian.PutUint64(packet[0:8], connID)
 	binary.BigEndian.PutUint32(packet[8:12], actionAnnounce)
 	binary.BigEndian.PutUint32(packet[12:16], 12345)
-	copy(packet[16:36], []byte("12345678901234567890")) // info_hash
-	copy(packet[36:56], []byte("peer1_______________")) // peer_id
-	binary.BigEndian.PutUint16(packet[96:98], 0)        // port = 0 (invalid)
+	copy(packet[16:36], "12345678901234567890")  // info_hash
+	copy(packet[36:56], "peer1_______________")  // peer_id
+	binary.BigEndian.PutUint16(packet[96:98], 0) // port = 0 (invalid)
 
 	tr.handleAnnounce(conn, addr, packet, 12345)
 
@@ -184,8 +183,8 @@ func TestHandleAnnounce_IPv6WithNonZeroIPField(t *testing.T) {
 	binary.BigEndian.PutUint64(packet[0:8], connID)
 	binary.BigEndian.PutUint32(packet[8:12], actionAnnounce)
 	binary.BigEndian.PutUint32(packet[12:16], 12345)
-	copy(packet[16:36], []byte("12345678901234567890"))
-	copy(packet[36:56], []byte("peer1_______________"))
+	copy(packet[16:36], "12345678901234567890")
+	copy(packet[36:56], "peer1_______________")
 	binary.BigEndian.PutUint32(packet[84:88], 0xC0A80101) // 192.168.1.1 - non-zero IP in packet (invalid for IPv6)
 	binary.BigEndian.PutUint16(packet[96:98], 6881)
 
@@ -216,8 +215,8 @@ func TestHandleAnnounce_AddPeer(t *testing.T) {
 	binary.BigEndian.PutUint64(packet[0:8], connID)
 	binary.BigEndian.PutUint32(packet[8:12], actionAnnounce)
 	binary.BigEndian.PutUint32(packet[12:16], 12345)
-	copy(packet[16:36], []byte("torrent12345678901"))
-	copy(packet[36:56], []byte("peer1_______________"))
+	copy(packet[16:36], "torrent12345678901")
+	copy(packet[36:56], "peer1_______________")
 	binary.BigEndian.PutUint64(packet[64:72], 1000) // left > 0 (leecher)
 	binary.BigEndian.PutUint16(packet[96:98], 6881)
 
@@ -255,8 +254,8 @@ func TestHandleAnnounce_EventStopped(t *testing.T) {
 	binary.BigEndian.PutUint64(packet[0:8], connID)
 	binary.BigEndian.PutUint32(packet[8:12], actionAnnounce)
 	binary.BigEndian.PutUint32(packet[12:16], 12345)
-	copy(packet[16:36], []byte("torrent12345678901"))
-	copy(packet[36:56], []byte("peer1_______________"))
+	copy(packet[16:36], "torrent12345678901")
+	copy(packet[36:56], "peer1_______________")
 	binary.BigEndian.PutUint32(packet[80:84], eventStopped)
 	binary.BigEndian.PutUint16(packet[96:98], 6881)
 
@@ -288,8 +287,8 @@ func TestHandleAnnounce_EventCompleted(t *testing.T) {
 	binary.BigEndian.PutUint64(packet[0:8], connID)
 	binary.BigEndian.PutUint32(packet[8:12], actionAnnounce)
 	binary.BigEndian.PutUint32(packet[12:16], 12345)
-	copy(packet[16:36], []byte("torrent12345678901"))
-	copy(packet[36:56], []byte("peer1_______________"))
+	copy(packet[16:36], "torrent12345678901")
+	copy(packet[36:56], "peer1_______________")
 	binary.BigEndian.PutUint64(packet[64:72], 0) // left = 0 (completed)
 	binary.BigEndian.PutUint32(packet[80:84], eventCompleted)
 	binary.BigEndian.PutUint16(packet[96:98], 6881)
@@ -326,8 +325,8 @@ func TestHandleAnnounce_NumWantClamped(t *testing.T) {
 	binary.BigEndian.PutUint64(packet[0:8], connID)
 	binary.BigEndian.PutUint32(packet[8:12], actionAnnounce)
 	binary.BigEndian.PutUint32(packet[12:16], 12345)
-	copy(packet[16:36], []byte("torrent12345678901"))
-	copy(packet[36:56], []byte("requester__________"))
+	copy(packet[16:36], "torrent12345678901")
+	copy(packet[36:56], "requester__________")
 	binary.BigEndian.PutUint32(packet[92:96], 10000) // request more than max
 	binary.BigEndian.PutUint16(packet[96:98], 6881)
 
@@ -393,7 +392,7 @@ func TestHandleScrape_UnknownTorrent(t *testing.T) {
 	binary.BigEndian.PutUint64(packet[0:8], connID)
 	binary.BigEndian.PutUint32(packet[8:12], actionScrape)
 	binary.BigEndian.PutUint32(packet[12:16], 12345)
-	copy(packet[16:36], []byte("nonexistent_________")) // info_hash
+	copy(packet[16:36], "nonexistent_________") // info_hash
 
 	tr.handleScrape(conn, addr, packet, 12345)
 
@@ -426,7 +425,7 @@ func TestHandleScrape_ExistingTorrent(t *testing.T) {
 	binary.BigEndian.PutUint64(packet[0:8], connID)
 	binary.BigEndian.PutUint32(packet[8:12], actionScrape)
 	binary.BigEndian.PutUint32(packet[12:16], 12345)
-	copy(packet[16:36], []byte("torrent12345678901"))
+	copy(packet[16:36], "torrent12345678901")
 
 	tr.handleScrape(conn, addr, packet, 12345)
 
@@ -544,8 +543,8 @@ func TestHandlePacket_AnnounceAction(t *testing.T) {
 	binary.BigEndian.PutUint64(packet[0:8], connID)
 	binary.BigEndian.PutUint32(packet[8:12], actionAnnounce)
 	binary.BigEndian.PutUint32(packet[12:16], 12345)
-	copy(packet[16:36], []byte("torrent12345678901"))
-	copy(packet[36:56], []byte("peer1_______________"))
+	copy(packet[16:36], "torrent12345678901")
+	copy(packet[36:56], "peer1_______________")
 	binary.BigEndian.PutUint16(packet[96:98], 6881)
 
 	tr.handlePacket(context.Background(), conn, addr, packet)
@@ -568,7 +567,7 @@ func TestHandlePacket_ScrapeAction(t *testing.T) {
 	binary.BigEndian.PutUint64(packet[0:8], connID)
 	binary.BigEndian.PutUint32(packet[8:12], actionScrape)
 	binary.BigEndian.PutUint32(packet[12:16], 12345)
-	copy(packet[16:36], []byte("torrent12345678901"))
+	copy(packet[16:36], "torrent12345678901")
 
 	tr.handlePacket(context.Background(), conn, addr, packet)
 
@@ -595,7 +594,7 @@ func TestHandlePacket_CancelledContext(t *testing.T) {
 	tr.handlePacket(ctx, conn, addr, packet)
 
 	if len(mock.writtenData) != 0 {
-		t.Error("should not respond when context is cancelled")
+		t.Error("should not respond when context is canceled")
 	}
 }
 
@@ -611,8 +610,8 @@ func TestHandleAnnounce_ResponseInterval(t *testing.T) {
 	binary.BigEndian.PutUint64(packet[0:8], connID)
 	binary.BigEndian.PutUint32(packet[8:12], actionAnnounce)
 	binary.BigEndian.PutUint32(packet[12:16], 12345)
-	copy(packet[16:36], []byte("torrent12345678901"))
-	copy(packet[36:56], []byte("peer1_______________"))
+	copy(packet[16:36], "torrent12345678901")
+	copy(packet[36:56], "peer1_______________")
 	binary.BigEndian.PutUint16(packet[96:98], 6881)
 
 	tr.handleAnnounce(conn, addr, packet, 12345)
@@ -638,8 +637,8 @@ func TestHandleAnnounce_IPv4WithCustomIP(t *testing.T) {
 	binary.BigEndian.PutUint64(packet[0:8], connID)
 	binary.BigEndian.PutUint32(packet[8:12], actionAnnounce)
 	binary.BigEndian.PutUint32(packet[12:16], 12345)
-	copy(packet[16:36], []byte("torrent12345678901"))
-	copy(packet[36:56], []byte("peer1_______________"))
+	copy(packet[16:36], "torrent12345678901")
+	copy(packet[36:56], "peer1_______________")
 	binary.BigEndian.PutUint32(packet[84:88], 0xC0A80101) // 192.168.1.1 in packet
 	binary.BigEndian.PutUint16(packet[96:98], 6881)
 
@@ -666,8 +665,8 @@ func TestHandleAnnounce_IPv6WithIPFieldZero(t *testing.T) {
 	binary.BigEndian.PutUint64(packet[0:8], connID)
 	binary.BigEndian.PutUint32(packet[8:12], actionAnnounce)
 	binary.BigEndian.PutUint32(packet[12:16], 12345)
-	copy(packet[16:36], []byte("torrent12345678901"))
-	copy(packet[36:56], []byte("peer1_______________"))
+	copy(packet[16:36], "torrent12345678901")
+	copy(packet[36:56], "peer1_______________")
 	binary.BigEndian.PutUint32(packet[84:88], 0) // IP field must be 0 for IPv6
 	binary.BigEndian.PutUint16(packet[96:98], 6881)
 
@@ -698,8 +697,8 @@ func TestHandleAnnounce_NumWantZero(t *testing.T) {
 	binary.BigEndian.PutUint64(packet[0:8], connID)
 	binary.BigEndian.PutUint32(packet[8:12], actionAnnounce)
 	binary.BigEndian.PutUint32(packet[12:16], 12345)
-	copy(packet[16:36], []byte("torrent12345678901"))
-	copy(packet[36:56], []byte("requester__________"))
+	copy(packet[16:36], "torrent12345678901")
+	copy(packet[36:56], "requester__________")
 	binary.BigEndian.PutUint32(packet[92:96], 0) // 0 means "use defaultNumWant"
 	binary.BigEndian.PutUint16(packet[96:98], 6881)
 
@@ -732,8 +731,8 @@ func TestHandleAnnounce_NumWantMaxUint32(t *testing.T) {
 	binary.BigEndian.PutUint64(packet[0:8], connID)
 	binary.BigEndian.PutUint32(packet[8:12], actionAnnounce)
 	binary.BigEndian.PutUint32(packet[12:16], 12345)
-	copy(packet[16:36], []byte("torrent12345678901"))
-	copy(packet[36:56], []byte("requester__________"))
+	copy(packet[16:36], "torrent12345678901")
+	copy(packet[36:56], "requester__________")
 	binary.BigEndian.PutUint32(packet[92:96], 0xFFFFFFFF) // 0xFFFFFFFF means "use defaultNumWant"
 	binary.BigEndian.PutUint16(packet[96:98], 6881)
 
@@ -787,8 +786,8 @@ func TestHandleScrape_MultipleInfoHashes(t *testing.T) {
 	binary.BigEndian.PutUint64(packet[0:8], connID)
 	binary.BigEndian.PutUint32(packet[8:12], actionScrape)
 	binary.BigEndian.PutUint32(packet[12:16], 12345)
-	copy(packet[16:36], []byte("torrent1___________"))
-	copy(packet[36:56], []byte("torrent2___________"))
+	copy(packet[16:36], "torrent1___________")
+	copy(packet[36:56], "torrent2___________")
 
 	tr.handleScrape(conn, addr, packet, 12345)
 
@@ -831,8 +830,8 @@ func TestHandleAnnounce_SeederReannouncesAsSeeder(t *testing.T) {
 	binary.BigEndian.PutUint64(packet[0:8], connID)
 	binary.BigEndian.PutUint32(packet[8:12], actionAnnounce)
 	binary.BigEndian.PutUint32(packet[12:16], 12345)
-	copy(packet[16:36], []byte("torrent12345678901"))
-	copy(packet[36:56], []byte("peer1_______________"))
+	copy(packet[16:36], "torrent12345678901")
+	copy(packet[36:56], "peer1_______________")
 	binary.BigEndian.PutUint64(packet[64:72], 0) // left = 0
 	binary.BigEndian.PutUint16(packet[96:98], 6881)
 
@@ -866,8 +865,8 @@ func TestHandleAnnounce_LeecherReannouncesAsLeecher(t *testing.T) {
 	binary.BigEndian.PutUint64(packet[0:8], connID)
 	binary.BigEndian.PutUint32(packet[8:12], actionAnnounce)
 	binary.BigEndian.PutUint32(packet[12:16], 12345)
-	copy(packet[16:36], []byte("torrent12345678901"))
-	copy(packet[36:56], []byte("peer1_______________"))
+	copy(packet[16:36], "torrent12345678901")
+	copy(packet[36:56], "peer1_______________")
 	binary.BigEndian.PutUint64(packet[64:72], 1000) // left > 0
 	binary.BigEndian.PutUint16(packet[96:98], 6881)
 
@@ -907,8 +906,8 @@ func TestHandleAnnounce_ResponseSeedersLeechers(t *testing.T) {
 	binary.BigEndian.PutUint64(packet[0:8], connID)
 	binary.BigEndian.PutUint32(packet[8:12], actionAnnounce)
 	binary.BigEndian.PutUint32(packet[12:16], 12345)
-	copy(packet[16:36], []byte("torrent12345678901"))
-	copy(packet[36:56], []byte("requester__________"))
+	copy(packet[16:36], "torrent12345678901")
+	copy(packet[36:56], "requester__________")
 	binary.BigEndian.PutUint64(packet[64:72], 5000) // left > 0 so requester is leecher
 	binary.BigEndian.PutUint16(packet[96:98], 6881)
 
@@ -940,8 +939,8 @@ func TestHandleAnnounce_IPv6PeerFormat(t *testing.T) {
 	binary.BigEndian.PutUint64(packet[0:8], connID)
 	binary.BigEndian.PutUint32(packet[8:12], actionAnnounce)
 	binary.BigEndian.PutUint32(packet[12:16], 12345)
-	copy(packet[16:36], []byte("torrent12345678901"))
-	copy(packet[36:56], []byte("requester__________"))
+	copy(packet[16:36], "torrent12345678901")
+	copy(packet[36:56], "requester__________")
 	binary.BigEndian.PutUint16(packet[96:98], 6881)
 
 	tr.handleAnnounce(conn, addr, packet, 12345)
@@ -975,7 +974,7 @@ func TestHandleScrape_CompletedField(t *testing.T) {
 	binary.BigEndian.PutUint64(packet[0:8], connID)
 	binary.BigEndian.PutUint32(packet[8:12], actionScrape)
 	binary.BigEndian.PutUint32(packet[12:16], 12345)
-	copy(packet[16:36], []byte("torrent12345678901"))
+	copy(packet[16:36], "torrent12345678901")
 
 	tr.handleScrape(conn, addr, packet, 12345)
 
@@ -1004,8 +1003,8 @@ func TestHandleAnnounce_NumWantLessThanAvailable(t *testing.T) {
 	binary.BigEndian.PutUint64(packet[0:8], connID)
 	binary.BigEndian.PutUint32(packet[8:12], actionAnnounce)
 	binary.BigEndian.PutUint32(packet[12:16], 12345)
-	copy(packet[16:36], []byte("torrent12345678901"))
-	copy(packet[36:56], []byte("requester__________"))
+	copy(packet[16:36], "torrent12345678901")
+	copy(packet[36:56], "requester__________")
 	binary.BigEndian.PutUint32(packet[92:96], 5) // request only 5
 	binary.BigEndian.PutUint16(packet[96:98], 6881)
 
@@ -1036,8 +1035,8 @@ func TestHandleAnnounce_IPv6PeersToIPv4Client(t *testing.T) {
 	binary.BigEndian.PutUint64(packet[0:8], connID)
 	binary.BigEndian.PutUint32(packet[8:12], actionAnnounce)
 	binary.BigEndian.PutUint32(packet[12:16], 12345)
-	copy(packet[16:36], []byte("torrent12345678901"))
-	copy(packet[36:56], []byte("requester__________"))
+	copy(packet[16:36], "torrent12345678901")
+	copy(packet[36:56], "requester__________")
 	binary.BigEndian.PutUint16(packet[96:98], 6881)
 
 	tr.handleAnnounce(conn, addr, packet, 12345)
@@ -1066,8 +1065,8 @@ func TestHandleAnnounce_IPv4PeersToIPv6Client(t *testing.T) {
 	binary.BigEndian.PutUint64(packet[0:8], connID)
 	binary.BigEndian.PutUint32(packet[8:12], actionAnnounce)
 	binary.BigEndian.PutUint32(packet[12:16], 12345)
-	copy(packet[16:36], []byte("torrent12345678901"))
-	copy(packet[36:56], []byte("requester__________"))
+	copy(packet[16:36], "torrent12345678901")
+	copy(packet[36:56], "requester__________")
 	binary.BigEndian.PutUint16(packet[96:98], 6881)
 
 	tr.handleAnnounce(conn, addr, packet, 12345)
@@ -1093,8 +1092,8 @@ func TestHandleAnnounce_EventStarted(t *testing.T) {
 	binary.BigEndian.PutUint64(packet[0:8], connID)
 	binary.BigEndian.PutUint32(packet[8:12], actionAnnounce)
 	binary.BigEndian.PutUint32(packet[12:16], 12345)
-	copy(packet[16:36], []byte("torrent12345678901"))
-	copy(packet[36:56], []byte("peer1_______________"))
+	copy(packet[16:36], "torrent12345678901")
+	copy(packet[36:56], "peer1_______________")
 	binary.BigEndian.PutUint64(packet[64:72], 1000) // left > 0
 	binary.BigEndian.PutUint32(packet[80:84], eventStarted)
 	binary.BigEndian.PutUint16(packet[96:98], 6881)
@@ -1123,8 +1122,8 @@ func TestHandleAnnounce_EventNone(t *testing.T) {
 	binary.BigEndian.PutUint64(packet[0:8], connID)
 	binary.BigEndian.PutUint32(packet[8:12], actionAnnounce)
 	binary.BigEndian.PutUint32(packet[12:16], 12345)
-	copy(packet[16:36], []byte("torrent12345678901"))
-	copy(packet[36:56], []byte("peer1_______________"))
+	copy(packet[16:36], "torrent12345678901")
+	copy(packet[36:56], "peer1_______________")
 	binary.BigEndian.PutUint64(packet[64:72], 1000) // left > 0
 	binary.BigEndian.PutUint32(packet[80:84], eventNone)
 	binary.BigEndian.PutUint16(packet[96:98], 6881)
@@ -1162,8 +1161,8 @@ func TestHandleAnnounce_PeerIPPortEncoding(t *testing.T) {
 	binary.BigEndian.PutUint64(packet[0:8], connID)
 	binary.BigEndian.PutUint32(packet[8:12], actionAnnounce)
 	binary.BigEndian.PutUint32(packet[12:16], 12345)
-	copy(packet[16:36], []byte("torrent12345678901"))
-	copy(packet[36:56], []byte("requester__________"))
+	copy(packet[16:36], "torrent12345678901")
+	copy(packet[36:56], "requester__________")
 	binary.BigEndian.PutUint16(packet[96:98], 6881)
 
 	tr.handleAnnounce(conn, addr, packet, 12345)
@@ -1197,8 +1196,8 @@ func TestHandleAnnounce_InvalidConnectionID(t *testing.T) {
 	binary.BigEndian.PutUint64(packet[0:8], invalidConnID)
 	binary.BigEndian.PutUint32(packet[8:12], actionAnnounce)
 	binary.BigEndian.PutUint32(packet[12:16], 12345)
-	copy(packet[16:36], []byte("torrent12345678901"))
-	copy(packet[36:56], []byte("peer1_______________"))
+	copy(packet[16:36], "torrent12345678901")
+	copy(packet[36:56], "peer1_______________")
 	binary.BigEndian.PutUint16(packet[96:98], 6881)
 
 	tr.handlePacket(context.Background(), conn, addr, packet)
@@ -1228,7 +1227,7 @@ func TestHandleScrape_InvalidConnectionID(t *testing.T) {
 	binary.BigEndian.PutUint64(packet[0:8], invalidConnID)
 	binary.BigEndian.PutUint32(packet[8:12], actionScrape)
 	binary.BigEndian.PutUint32(packet[12:16], 12345)
-	copy(packet[16:36], []byte("torrent12345678901"))
+	copy(packet[16:36], "torrent12345678901")
 
 	tr.handlePacket(context.Background(), conn, addr, packet)
 
@@ -1270,8 +1269,8 @@ func TestFullFlow_ConnectAnnounceScrape(t *testing.T) {
 	binary.BigEndian.PutUint64(announcePacket[0:8], connectionID)
 	binary.BigEndian.PutUint32(announcePacket[8:12], actionAnnounce)
 	binary.BigEndian.PutUint32(announcePacket[12:16], 10002)
-	copy(announcePacket[16:36], []byte("torrent12345678901"))
-	copy(announcePacket[36:56], []byte("peer1_______________"))
+	copy(announcePacket[16:36], "torrent12345678901")
+	copy(announcePacket[36:56], "peer1_______________")
 	binary.BigEndian.PutUint64(announcePacket[64:72], 1000)
 	binary.BigEndian.PutUint16(announcePacket[96:98], 6881)
 
@@ -1299,7 +1298,7 @@ func TestFullFlow_ConnectAnnounceScrape(t *testing.T) {
 	binary.BigEndian.PutUint64(scrapePacket[0:8], connectionID)
 	binary.BigEndian.PutUint32(scrapePacket[8:12], actionScrape)
 	binary.BigEndian.PutUint32(scrapePacket[12:16], 10003)
-	copy(scrapePacket[16:36], []byte("torrent12345678901"))
+	copy(scrapePacket[16:36], "torrent12345678901")
 
 	tr.handlePacket(context.Background(), conn, addr, scrapePacket)
 
@@ -1333,8 +1332,8 @@ func TestFullFlow_AnnounceWithPeerExchange(t *testing.T) {
 	binary.BigEndian.PutUint64(packet1[0:8], connID1)
 	binary.BigEndian.PutUint32(packet1[8:12], actionAnnounce)
 	binary.BigEndian.PutUint32(packet1[12:16], 10001)
-	copy(packet1[16:36], []byte("torrent12345678901"))
-	copy(packet1[36:56], []byte("peer1_______________"))
+	copy(packet1[16:36], "torrent12345678901")
+	copy(packet1[36:56], "peer1_______________")
 	binary.BigEndian.PutUint64(packet1[64:72], 1000)
 	binary.BigEndian.PutUint16(packet1[96:98], 6881)
 	tr.handleAnnounce(mock, addr1, packet1, 10001)
@@ -1346,8 +1345,8 @@ func TestFullFlow_AnnounceWithPeerExchange(t *testing.T) {
 	binary.BigEndian.PutUint64(packet2[0:8], connID2)
 	binary.BigEndian.PutUint32(packet2[8:12], actionAnnounce)
 	binary.BigEndian.PutUint32(packet2[12:16], 10002)
-	copy(packet2[16:36], []byte("torrent12345678901"))
-	copy(packet2[36:56], []byte("peer2_______________"))
+	copy(packet2[16:36], "torrent12345678901")
+	copy(packet2[36:56], "peer2_______________")
 	binary.BigEndian.PutUint64(packet2[64:72], 2000)
 	binary.BigEndian.PutUint16(packet2[96:98], 6882)
 	tr.handleAnnounce(mock, addr2, packet2, 10002)

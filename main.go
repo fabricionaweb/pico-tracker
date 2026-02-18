@@ -31,8 +31,8 @@ func info(format string, v ...any) {
 }
 
 type config struct {
-	port        int
 	secret      string
+	port        int
 	showVersion bool
 }
 
@@ -74,6 +74,7 @@ func parseFlags(args []string) *config {
 	}
 
 	// With ExitOnError, flag package exits on error
+	//nolint:errcheck // Test flags are valid, parsing error will exit
 	_ = fs.Parse(args)
 
 	debugMode = *debug
@@ -139,8 +140,10 @@ func main() {
 	<-ctx.Done()
 	info("Shutting down gracefully...")
 
+	//nolint:errcheck // Connection close errors are ignored during shutdown
 	conn4.Close()
 	if conn6 != nil {
+		//nolint:errcheck // Connection close errors are ignored during shutdown
 		conn6.Close()
 	}
 
@@ -156,6 +159,7 @@ func main() {
 		info("Shutdown complete")
 	case <-time.After(30 * time.Second):
 		log.Printf("[WARN] Forcing shutdown after timeout, some handlers incomplete")
+		//nolint:gocritic // Intentional exit after deferred cleanup timeout
 		os.Exit(1)
 	}
 }
