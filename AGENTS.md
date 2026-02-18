@@ -73,6 +73,7 @@
 - Use `cd && command` patterns
 - Skip reading before editing
 - Amend commits not created in session
+- **Make anything up** - always verify facts before stating them
 
 ### Do
 - Add necessary comments
