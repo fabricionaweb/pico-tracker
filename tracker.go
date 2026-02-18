@@ -156,12 +156,12 @@ func (t *Torrent) getPeers(exclude HashID, numWant int, clientIsV4 bool, peerSiz
 // sendError sends an error message back to the client when something goes wrong
 // Error response format: [action:4][transaction_id:4][error_message:variable]
 // Fixed header: 4 + 4 = 8 bytes
-func (tr *Tracker) sendError(conn *net.UDPConn, addr *net.UDPAddr, transactionID uint32, message string) {
+func (tr *Tracker) sendError(conn net.PacketConn, addr *net.UDPAddr, transactionID uint32, message string) {
 	response := make([]byte, 8+len(message))
 	binary.BigEndian.PutUint32(response[0:4], actionError)
 	binary.BigEndian.PutUint32(response[4:8], transactionID)
 	copy(response[8:], message)
-	if _, err := conn.WriteToUDP(response, addr); err != nil {
+	if _, err := conn.WriteTo(response, addr); err != nil {
 		info("failed to send error to %s: %v", addr, err)
 	} else {
 		debug("sent error to %s: %s", addr, message)

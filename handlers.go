@@ -15,7 +15,7 @@ import (
 // The client sends a "connect" request to establish a session, and we give them
 // a connection ID they must use in all future requests to prove they're legitimate
 // This prevents IP spoofing attacks where someone could fake announce requests
-func (tr *Tracker) handleConnect(conn *net.UDPConn, addr *net.UDPAddr, transactionID uint32) {
+func (tr *Tracker) handleConnect(conn net.PacketConn, addr *net.UDPAddr, transactionID uint32) {
 	debug("connect request from %s, transaction_id=%d", addr, transactionID)
 
 	if allowed, remaining := tr.checkRateLimit(addr); !allowed {
@@ -32,7 +32,7 @@ func (tr *Tracker) handleConnect(conn *net.UDPConn, addr *net.UDPAddr, transacti
 	binary.BigEndian.PutUint32(response[4:8], transactionID)
 	binary.BigEndian.PutUint64(response[8:16], connectionID)
 
-	if _, err := conn.WriteToUDP(response, addr); err != nil {
+	if _, err := conn.WriteTo(response, addr); err != nil {
 		info("failed to send connect response to %s: %v", addr, err)
 	} else {
 		debug("sent connect response with connection_id=%d", connectionID)
@@ -45,7 +45,7 @@ func (tr *Tracker) handleConnect(conn *net.UDPConn, addr *net.UDPAddr, transacti
 //
 //	[connection_id:8][action:4][transaction_id:4][info_hash:20][peer_id:20]
 //	[downloaded:8][left:8][uploaded:8][event:4][IP:4][key:4][num_want:4][port:2]
-func (tr *Tracker) handleAnnounce(conn *net.UDPConn, addr *net.UDPAddr, packet []byte, transactionID uint32) {
+func (tr *Tracker) handleAnnounce(conn net.PacketConn, addr *net.UDPAddr, packet []byte, transactionID uint32) {
 	if len(packet) < 98 {
 		debug("announce request too short from %s", addr)
 		tr.sendError(conn, addr, transactionID, "invalid packet size")
@@ -125,7 +125,7 @@ func (tr *Tracker) handleAnnounce(conn *net.UDPConn, addr *net.UDPAddr, packet [
 	binary.BigEndian.PutUint32(response[16:20], uint32(seeders))
 	copy(response[20:], peers)
 
-	if _, err := conn.WriteToUDP(response, addr); err != nil {
+	if _, err := conn.WriteTo(response, addr); err != nil {
 		info("failed to send announce response to %s: %v", addr, err)
 	}
 }
@@ -133,7 +133,7 @@ func (tr *Tracker) handleAnnounce(conn *net.UDPConn, addr *net.UDPAddr, packet [
 // handleScrape lets clients ask for statistics about torrents without announcing
 // This is useful for checking if a torrent is active before downloading
 // Scrape header format: [connection_id:8][action:4][transaction_id:4][info_hash:20]
-func (tr *Tracker) handleScrape(conn *net.UDPConn, addr *net.UDPAddr, packet []byte, transactionID uint32) {
+func (tr *Tracker) handleScrape(conn net.PacketConn, addr *net.UDPAddr, packet []byte, transactionID uint32) {
 	if len(packet) < 36 {
 		debug("scrape request too short from %s", addr)
 		tr.sendError(conn, addr, transactionID, "no info hashes provided")
@@ -173,7 +173,7 @@ func (tr *Tracker) handleScrape(conn *net.UDPConn, addr *net.UDPAddr, packet []b
 		debug("scrape for %s: seeders=%d completed=%d leechers=%d", infoHash.String(), seeders, completed, leechers)
 	}
 
-	if _, err := conn.WriteToUDP(response, addr); err != nil {
+	if _, err := conn.WriteTo(response, addr); err != nil {
 		info("failed to send scrape response to %s: %v", addr, err)
 	}
 }
@@ -181,7 +181,7 @@ func (tr *Tracker) handleScrape(conn *net.UDPConn, addr *net.UDPAddr, packet []b
 // handlePacket processes any incoming UDP packet and routes it to the right handler
 // based on the action field. Connection ID validation is performed for announce/scrape
 // Packet header format: [connection_id:8][action:4][transaction_id:4]
-func (tr *Tracker) handlePacket(ctx context.Context, conn *net.UDPConn, addr *net.UDPAddr, packet []byte) {
+func (tr *Tracker) handlePacket(ctx context.Context, conn net.PacketConn, addr *net.UDPAddr, packet []byte) {
 	if ctx.Err() != nil {
 		return
 	}
@@ -226,7 +226,7 @@ func (tr *Tracker) handlePacket(ctx context.Context, conn *net.UDPConn, addr *ne
 	default:
 		// tr.sendError will add debug and skip debug for loopback (healthcheck)
 		if fromLoopback {
-			if _, err := conn.WriteToUDP([]byte("unknown action\n"), addr); err != nil {
+			if _, err := conn.WriteTo([]byte("unknown action\n"), addr); err != nil {
 				debug("failed to respond to loopback: %v", err)
 			}
 			return
