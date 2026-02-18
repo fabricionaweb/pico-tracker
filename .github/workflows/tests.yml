@@ -16,15 +16,13 @@ jobs:
           - goarch: amd64
             docker_arch: x86_64
           - goarch: arm
-            docker_arch: armv7
+            docker_arch: arm
           - goarch: arm64
-            docker_arch: aarch64
+            docker_arch: arm64v8
           - goarch: mips64le
             docker_arch: mips64le
           - goarch: ppc64le
             docker_arch: ppc64le
-          - goarch: riscv64
-            docker_arch: riscv64
           - goarch: s390x
             docker_arch: s390x
 
