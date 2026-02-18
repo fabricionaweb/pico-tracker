@@ -12,11 +12,11 @@ This directory contains a standalone benchmark tool for testing pico-tracker per
 ## Quick Start
 
 ```bash
-# Terminal 1: Start the tracker
-go run main.go
+# Terminal 1: Build and start the tracker
+go run ./
 
 # Terminal 2: Run benchmark
-go run benchmark/main.go
+go run ./benchmark
 
 # The benchmark runs for 30 seconds with 100 concurrent workers by default
 ```
