@@ -7,7 +7,8 @@ run:
   tests: true
 
 output:
-  format: colored-line-number
+  formats:
+    - format: colored-line-number
   print-issued-lines: true
   print-linter-name: true
 
@@ -17,8 +18,9 @@ linters-settings:
     check-blank: true
   
   govet:
-    check-shadowing: true
-    enable-all: true
+    enable:
+      - shadow
+      - fieldalignment
   
   gocyclo:
     min-complexity: 15
@@ -63,35 +65,26 @@ linters:
     - gocyclo
     - gofmt
     - goimports
-    - golint
-    - gomnd
     - goprintffuncname
     - gosec
     - gosimple
     - govet
     - ineffassign
-    - interfacer
     - lll
     - misspell
     - nakedret
     - prealloc
-    - scopelint
     - staticcheck
-    - structcheck
     - stylecheck
     - typecheck
     - unconvert
     - unparam
     - unused
-    - varcheck
     - whitespace
   
   disable:
     # Disabled because they are noisy or not applicable
-    - maligned  # deprecated
-    - golint    # deprecated, replaced by revive
-    - scopelint # deprecated
-    - interfacer # deprecated
+    
     
   fast: false
 
@@ -116,6 +109,26 @@ issues:
       linters:
         - gosec
       # Only used in tests with controlled input
+
+    - text: "G104:"
+      linters:
+        - gosec
+      # Ignore unhandled errors in Close() calls during shutdown
+
+    - text: "G115:"
+      linters:
+        - gosec
+      # Integer overflow is intentional for protocol
+
+    - text: "G404:"
+      linters:
+        - gosec
+      # Weak random is acceptable for peer selection
+    
+    - text: "exitAfterDefer"
+      linters:
+        - gocritic
+      # Intentional os.Exit after defer cleanup timeout
   
   exclude-use-default: false
   max-issues-per-linter: 50

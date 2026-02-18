@@ -96,6 +96,19 @@
 - Verify no secrets before committing
 - Use conventional commit format: `<type>: <description>` (e.g., `feat:`, `fix:`, `refactor:`, `docs:`, `chore:`)
 - **REQUIRED**: Add co-author trailer: `git commit -m "<message>" --trailer "Co-authored-by: <AI-Model-Name> <<model-contact>>"` (search git log with `--format="%(trailers:key=Co-authored-by)" -4` or more to find exact format used)
+- **ALWAYS run lint before committing**: Run `golangci-lint run` and fix any issues before committing
+
+## Linting
+
+### Before Committing
+- Always run `golangci-lint run` to check for lint issues
+- Fix any lint errors before committing
+- Do not add new lint issues to the codebase
+
+### Config
+- This project uses golangci-lint (see `.golangci.yml`)
+- Check the config file for enabled linters and exclusions
+- When adding workarounds for lint issues, use nolint comments or config exclusions (see existing patterns in the codebase)
 
 ## Skills
 
