@@ -371,3 +371,43 @@ b.Stats.ResponseSizes = append(b.Stats.ResponseSizes, n)
 - `RESULTS_TEMPLATE.md` - Detailed template for documenting results
 - `main.go` - Tracker source code
 - `main_test.go` - Unit tests (if they exist)
+
+---
+
+## Prompt for AGENTS
+
+When running benchmarks:
+
+1. **Always run benchmarks sequentially** - NOT in parallel to avoid resource contention
+2. **Use the tracker binary** - Build with `go build -o pico-tracker .` and run `./pico-tracker &`
+3. **Stop tracker when done** - Kill the process after benchmarks complete
+4. **Document everything** - Include all commands, parameters, and system info
+5. **Compare with previous results** - Use the most recent results file as baseline
+
+### Standard Benchmark Command Template
+
+```bash
+# Light Load (10 workers)
+go run benchmark/main.go -target 127.0.0.1:1337 -duration 30s -concurrency 10 > /tmp/light_load.txt 2>&1
+
+# Medium Load (100 workers)  
+go run benchmark/main.go -target 127.0.0.1:1337 -duration 30s -concurrency 100 > /tmp/medium_load.txt 2>&1
+
+# Heavy Load (1000 workers)
+go run benchmark/main.go -target 127.0.0.1:1337 -duration 30s -concurrency 1000 > /tmp/heavy_load.txt 2>&1
+```
+
+### Running Against Remote Linux Instances
+
+When benchmarking against remote Linux servers (not localhost):
+
+1. **Ask for the instance details** - Request the IP:port of the remote tracker instance
+2. **Replace target** - Update the `-target` flag with the provided IP:port
+3. **Ensure connectivity** - Verify network connectivity before running benchmarks
+4. **Document the environment** - Note that tests were run against remote instance
+
+Example command for remote instance:
+```bash
+# Replace <IP:PORT> with the instance provided by the user
+go run benchmark/main.go -target <IP:PORT> -duration 30s -concurrency 100
+```
