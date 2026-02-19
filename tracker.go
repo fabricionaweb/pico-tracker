@@ -7,6 +7,14 @@ import (
 	"time"
 )
 
+// Error response buffer optimization constants
+// Stack-allocate small error responses to avoid heap allocation
+const (
+	errorHeaderSize   = 8                                   // action:4 + transaction_id:4
+	errorMaxStackSize = 128                                 // maximum stack buffer size for error responses
+	errorMaxMsgLen    = errorMaxStackSize - errorHeaderSize // 120 bytes for message
+)
+
 // Tracker methods
 
 // peerInfo is a lightweight struct for copying peer data out of locks
@@ -189,19 +197,13 @@ func (t *Torrent) getPeers(
 // Error response format: [action:4][transaction_id:4][error_message:variable]
 // Fixed header: 4 + 4 = 8 bytes
 func (tr *Tracker) sendError(conn net.PacketConn, addr *net.UDPAddr, transactionID uint32, message string) {
-	const (
-		errorHeaderSize = 8 // action:4 + transaction_id:4
-		maxStackSize    = 128
-		maxMsgLen       = maxStackSize - errorHeaderSize // 120 bytes for message
-	)
-
 	msgLen := len(message)
 	totalSize := errorHeaderSize + msgLen
 
 	var response []byte
-	if msgLen <= maxMsgLen {
+	if msgLen <= errorMaxMsgLen {
 		// Stack-allocate small errors to avoid heap allocation
-		var buf [maxStackSize]byte
+		var buf [errorMaxStackSize]byte
 		response = buf[:totalSize]
 	} else {
 		// Heap allocate only for large messages

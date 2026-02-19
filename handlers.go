@@ -9,6 +9,28 @@ import (
 	"time"
 )
 
+// Response buffer optimization constants
+// Stack-allocate small responses to avoid heap allocation
+const (
+	// Connect response: action:4 + transaction_id:4 + connection_id:8
+	connectResponseSize = 4 + 4 + 8 // 16 bytes
+
+	// Announce request minimum size (sum of all fields):
+	// connection_id:8 + action:4 + transaction_id:4 + info_hash:20 + peer_id:20 +
+	// downloaded:8 + left:8 + uploaded:8 + event:4 + IP:4 + key:4 + num_want:4 + port:2
+	minAnnouncePacketSize = 98
+
+	announceHeaderSize      = 20 // action:4 + transaction_id:4 + interval:4 + leechers:4 + seeders:4
+	maxStackAnnouncePeersV4 = 20 // 20 * 6 = 120 bytes, total with header = 140
+	maxStackAnnouncePeersV6 = 10 // 10 * 18 = 180 bytes, total with header = 200
+	maxStackAnnounceSizeV4  = announceHeaderSize + maxStackAnnouncePeersV4*6
+	maxStackAnnounceSizeV6  = announceHeaderSize + maxStackAnnouncePeersV6*18
+
+	scrapeHeaderSize     = 8  // action:4 + transaction_id:4
+	scrapeEntrySize      = 12 // seeders:4 + completed:4 + leechers:4
+	maxStackScrapeHashes = 10 // 10 * 12 = 120 bytes, total with header = 128
+)
+
 // Request handlers
 
 // handleConnect is the first step in UDP tracker communication
@@ -28,8 +50,8 @@ func (tr *Tracker) handleConnect(conn net.PacketConn, addr *net.UDPAddr, transac
 	connectionID := generateConnectionID(addr)
 
 	// Connect response format: [action:4][transaction_id:4][connection_id:8]
-	// Stack-allocate fixed 16-byte response to avoid heap allocation
-	var response [16]byte
+	// Stack-allocate fixed size response to avoid heap allocation
+	var response [connectResponseSize]byte
 	binary.BigEndian.PutUint32(response[0:4], actionConnect)
 	binary.BigEndian.PutUint32(response[4:8], transactionID)
 	binary.BigEndian.PutUint64(response[8:16], connectionID)
@@ -48,7 +70,7 @@ func (tr *Tracker) handleConnect(conn net.PacketConn, addr *net.UDPAddr, transac
 //	[connection_id:8][action:4][transaction_id:4][info_hash:20][peer_id:20]
 //	[downloaded:8][left:8][uploaded:8][event:4][IP:4][key:4][num_want:4][port:2]
 func (tr *Tracker) handleAnnounce(conn net.PacketConn, addr *net.UDPAddr, packet []byte, transactionID uint32) {
-	if len(packet) < 98 {
+	if len(packet) < minAnnouncePacketSize {
 		debug("announce request too short from %s", addr)
 		tr.sendError(conn, addr, transactionID, "invalid packet size")
 		return
@@ -122,10 +144,20 @@ func (tr *Tracker) handleAnnounce(conn net.PacketConn, addr *net.UDPAddr, packet
 	debug("returning %d seeders, %d leechers, %d peers", seeders, leechers, len(peers)/peerSize)
 
 	// Announce response format: [action:4][transaction_id:4][interval:4][leechers:4][seeders:4][peers:variable]
-	// Fixed header: 4 + 4 + 4 + 4 + 4 = 20 bytes
-	// Pre-allocate exact size needed: 20-byte header + peer data
-	responseSize := 20 + len(peers)
-	response := make([]byte, responseSize)
+	// Stack-allocate small responses to avoid heap allocation
+	responseSize := announceHeaderSize + len(peers)
+	var response []byte
+	switch {
+	case clientIsV4 && responseSize <= maxStackAnnounceSizeV4:
+		var buf [maxStackAnnounceSizeV4]byte
+		response = buf[:responseSize]
+	case !clientIsV4 && responseSize <= maxStackAnnounceSizeV6:
+		var buf [maxStackAnnounceSizeV6]byte
+		response = buf[:responseSize]
+	default:
+		response = make([]byte, responseSize)
+	}
+
 	binary.BigEndian.PutUint32(response[0:4], actionAnnounce)
 	binary.BigEndian.PutUint32(response[4:8], transactionID)
 	interval := announceInterval * int(time.Minute/time.Second)
@@ -160,41 +192,45 @@ func (tr *Tracker) handleScrape(conn net.PacketConn, addr *net.UDPAddr, packet [
 	debug("scrape request from %s with %d hashes, transaction_id=%d", addr, numHashes, transactionID)
 
 	// Scrape response format: [action:4][transaction_id:4] + [seeders:4][completed:4][leechers:4] per hash
-	// Fixed header: 4 + 4 = 8 bytes
-	// Each torrent entry: 4 + 4 + 4 = 12 bytes
-	const scrapeEntrySize = 12
-	scrapeResponseSize := 8 + numHashes*scrapeEntrySize
-	response := make([]byte, scrapeResponseSize)
+	// Stack-allocate small responses to avoid heap allocation
+	responseSize := scrapeHeaderSize + numHashes*scrapeEntrySize
+	var response []byte
+	if numHashes <= maxStackScrapeHashes {
+		var buf [scrapeHeaderSize + maxStackScrapeHashes*scrapeEntrySize]byte
+		response = buf[:responseSize]
+	} else {
+		response = make([]byte, responseSize)
+	}
 	binary.BigEndian.PutUint32(response[0:4], actionScrape)
 	binary.BigEndian.PutUint32(response[4:8], transactionID)
 
 	// Process all hashes in a single pass with pre-calculated offsets
-	dataOffset := 8
+	dataOffset := scrapeHeaderSize
 	for i := range numHashes {
 		infoHash := NewHashID(packet[16+i*20 : 16+(i+1)*20])
 
-		var seeders, completed, leechers uint32
+		var s, c, l uint32
 		if tr.isWhitelisted(infoHash) {
 			torrent := tr.getTorrent(infoHash)
 			if torrent != nil {
 				torrent.mu.RLock()
 				//nolint:gosec // seeders/leechers/completed are bounded int counts
-				seeders = uint32(torrent.seeders)
+				s = uint32(torrent.seeders)
 				//nolint:gosec // seeders/leechers/completed are bounded int counts
-				completed = uint32(torrent.completed)
+				c = uint32(torrent.completed)
 				//nolint:gosec // seeders/leechers/completed are bounded int counts
-				leechers = uint32(torrent.leechers)
+				l = uint32(torrent.leechers)
 				torrent.mu.RUnlock()
 			}
-			debug("scrape for %s: seeders=%d completed=%d leechers=%d", infoHash.String(), seeders, completed, leechers)
+			debug("scrape for %s: seeders=%d completed=%d leechers=%d", infoHash.String(), s, c, l)
 		} else {
 			debug("scrape filtered: info_hash %s not whitelisted from %s", infoHash.String(), addr)
 		}
 
 		// Write directly to final buffer location to avoid intermediate allocations
-		binary.BigEndian.PutUint32(response[dataOffset:dataOffset+4], seeders)
-		binary.BigEndian.PutUint32(response[dataOffset+4:dataOffset+8], completed)
-		binary.BigEndian.PutUint32(response[dataOffset+8:dataOffset+12], leechers)
+		binary.BigEndian.PutUint32(response[dataOffset:dataOffset+4], s)
+		binary.BigEndian.PutUint32(response[dataOffset+4:dataOffset+8], c)
+		binary.BigEndian.PutUint32(response[dataOffset+8:dataOffset+12], l)
 		dataOffset += scrapeEntrySize
 	}
 

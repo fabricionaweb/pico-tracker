@@ -79,6 +79,8 @@ const (
 
 	rateLimitWindow = 2  // (minutes) window duration for rate limiting
 	rateLimitBurst  = 10 // max connect requests per rateLimitWindow
+
+	connectionExpiration = 2 * time.Minute // per BEP 15
 )
 
 // Connection ID generation and validation
@@ -103,9 +105,8 @@ func generateConnectionID(addr *net.UDPAddr) uint64 {
 func validateConnectionID(id uint64, addr *net.UDPAddr) bool {
 	//nolint:gosec // Intentionally extracting lower 32 bits for protocol
 	timestamp := uint32(id >> 32)
-	expiration := 2 * time.Minute // 2 minutes per BEP 15
 
-	if time.Since(time.Unix(int64(timestamp), 0)) > expiration {
+	if time.Since(time.Unix(int64(timestamp), 0)) > connectionExpiration {
 		return false
 	}
 
