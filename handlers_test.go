@@ -10,6 +10,12 @@ import (
 	"time"
 )
 
+// Test constants for IP addresses used across tests
+const (
+	testIPv4Addr    = "192.168.1.1"
+	testIPv4Addr100 = "192.168.1.100"
+)
+
 // mockPacketConn implements net.PacketConn for testing without real UDP sockets
 type mockPacketConn struct {
 	localAddr   net.Addr
@@ -626,8 +632,8 @@ func TestHandleAnnounce_IPv4WithCustomIP(t *testing.T) {
 	torrent.mu.RLock()
 	p := torrent.peers[peerID]
 	torrent.mu.RUnlock()
-	if p.IP.String() != "192.168.1.1" {
-		t.Errorf("peer IP = %s, want 192.168.1.1 (from packet)", p.IP)
+	if p.IP.String() != testIPv4Addr {
+		t.Errorf("peer IP = %s, want %s (from packet)", p.IP, testIPv4Addr)
 	}
 }
 
@@ -1150,8 +1156,8 @@ func TestHandleAnnounce_PeerIPPortEncoding(t *testing.T) {
 	peerIPResp := net.IP(mock.writtenData[peersStart : peersStart+4])
 	peerPortResp := binary.BigEndian.Uint16(mock.writtenData[peersStart+4 : peersStart+6])
 
-	if peerIPResp.String() != "192.168.1.100" {
-		t.Errorf("peer IP = %s, want 192.168.1.100", peerIPResp)
+	if peerIPResp.String() != testIPv4Addr100 {
+		t.Errorf("peer IP = %s, want %s", peerIPResp, testIPv4Addr100)
 	}
 	if peerPortResp != 6889 {
 		t.Errorf("peer port = %d, want 6889", peerPortResp)
