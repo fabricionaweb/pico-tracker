@@ -269,9 +269,9 @@ func (tr *Tracker) listen(ctx context.Context, conn *net.UDPConn) {
 		putBuffer(readBuf)
 
 		tr.wg.Add(1)
-		go func() {
+		go func(addr *net.UDPAddr, pkt []byte) {
 			defer tr.wg.Done()
-			tr.handlePacket(ctx, conn, clientAddr, packet)
-		}()
+			tr.handlePacket(ctx, conn, addr, pkt)
+		}(clientAddr, packet)
 	}
 }
