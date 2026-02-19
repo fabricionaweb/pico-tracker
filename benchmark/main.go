@@ -201,7 +201,7 @@ func (b *Benchmark) worker(id int, wg *sync.WaitGroup) {
 		hashes[i] = generateInfoHash(id, i)
 	}
 
-	connectionID, err := b.doConnect(udpConn)
+	connID, err := b.doConnect(udpConn)
 	if err != nil {
 		log.Printf("Worker %d: initial connect failed: %v", id, err)
 		return
@@ -210,12 +210,16 @@ func (b *Benchmark) worker(id int, wg *sync.WaitGroup) {
 	atomic.AddUint64(&b.Stats.SuccessfulReqs, 1)
 	atomic.AddUint64(&b.Stats.TotalRequests, 1)
 
+	var connIDAtomic atomic.Uint64
+	connIDAtomic.Store(connID)
+
 	// Refresh connection ID before it expires (2 min per BEP 15)
 	reconnectTimer := time.AfterFunc(2*time.Minute, func() {
-		connectionID, err = b.doConnect(udpConn)
+		newConnID, err := b.doConnect(udpConn)
 		if err != nil {
 			log.Printf("Worker %d: re-connect failed: %v", id, err)
 		} else {
+			connIDAtomic.Store(newConnID)
 			atomic.AddUint64(&b.Stats.ConnectCount, 1)
 			atomic.AddUint64(&b.Stats.SuccessfulReqs, 1)
 			atomic.AddUint64(&b.Stats.TotalRequests, 1)
@@ -234,7 +238,7 @@ func (b *Benchmark) worker(id int, wg *sync.WaitGroup) {
 			<-rateLimiter.C
 		}
 
-		b.performCycleWithConnID(udpConn, connectionID, peerID, hashes)
+		b.performCycleWithConnID(udpConn, connIDAtomic.Load(), peerID, hashes)
 	}
 }
 
@@ -306,8 +310,8 @@ func readResponse(conn *net.UDPConn, buf []byte, action, transactionID uint32) (
 	if err != nil {
 		return 0, err
 	}
-	if n < 20 {
-		return 0, fmt.Errorf("response too short")
+	if n < 16 {
+		return 0, fmt.Errorf("response too short: got %d bytes, expected at least 16", n)
 	}
 	respAction := binary.BigEndian.Uint32(buf[0:4])
 	respTxID := binary.BigEndian.Uint32(buf[4:8])

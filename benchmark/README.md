@@ -32,19 +32,7 @@ go run ./
 go run ./benchmark
 ```
 
-> **Platform Note - macOS Users:** Benchmarking against **localhost on macOS is fundamentally broken** for high-throughput UDP testing. When multiple workers send packets simultaneously, the macOS UDP stack drops packets regardless of buffer size (even with 8MB+ buffers). This is a macOS kernel limitation, not a tracker issue.
->
-> **The only reliable benchmark method is testing against a remote Linux server.**
->
-> **Why macOS localhost fails:**
-> - The benchmark starts all workers simultaneously, causing a packet burst
-> - macOS UDP receive queue overflows before the tracker can read any packets
-> - Increasing socket buffers (via `SetReadBuffer` or `sysctl`) does **not** resolve this
-> - Docker on macOS has the same issue (runs Linux in a VM, but networking still goes through macOS)
->
-> **What does work on macOS:**
-> - Smoke testing: `-concurrency 1` to verify the tracker responds
-> - Testing against remote Linux servers (e.g., `tracker.example.com:1337`) - this shows 4,000+ RPS with 0% failures
+> **Platform Note:** macOS may show slightly lower performance than Linux due to kernel UDP stack differences. For production benchmarks, testing against a remote Linux server is recommended for the most accurate results.
 >
 
 ## What the Benchmark Measures
@@ -65,9 +53,9 @@ Flags:
   -target string      Tracker address (default "localhost:1337")
   -duration duration  Test duration (default 30s)
   -concurrency int    Number of parallel workers (default 100)
-  -rate int          Rate limit per worker in req/s (0=unlimited)
-  -hashes int        Info hashes per worker (default 5)
-  -numwant int       Peers to request (default 50)
+  -rate int           Rate limit per worker in req/s (0=unlimited)
+  -hashes int         Info hashes per worker (default 5)
+  -numwant int        Peers to request (default 50)
 ```
 
 ### Example Commands
@@ -250,17 +238,15 @@ Different percentiles tell different stories:
 **Symptoms**: Failed requests > 1%
 
 **Possible causes**:
-1. **macOS localhost UDP drops**: The #1 cause of benchmark failures. When running against localhost on macOS with >1 worker, packets are dropped at the kernel level due to burst traffic. **Increasing socket buffers does not fix this** - we tested 4MB and 8MB buffers with no improvement.
-2. **Tracker overloaded**: Concurrency too high
-3. **Network timeouts**: Remote tracker with high latency
-4. **Connection refused**: Tracker not running or wrong port
-5. **Malformed responses**: Tracker bugs
+1. **Tracker overloaded**: Concurrency too high
+2. **Network timeouts**: Remote tracker with high latency
+3. **Connection refused**: Tracker not running or wrong port
+4. **Malformed responses**: Tracker bugs
 
 **Solutions**:
-- **macOS users**: Run benchmarks against a **remote Linux server**. macOS localhost is unreliable for >1 worker.
-- For local smoke testing on macOS, use `-concurrency 1` only
 - Verify tracker is running: `lsof -i :1337`
 - Enable tracker debug mode: `DEBUG=1 go run main.go`
+- Reduce concurrency and retry
 
 ### High Latency
 
@@ -404,7 +390,7 @@ When testing against a remote tracker instance:
 # Light Load (10 workers)
 go run benchmark/main.go -target <IP:PORT> -duration 30s -concurrency 10 > /tmp/light_load.txt 2>&1
 
-# Medium Load (100 workers)  
+# Medium Load (100 workers)
 go run benchmark/main.go -target <IP:PORT> -duration 30s -concurrency 100 > /tmp/medium_load.txt 2>&1
 
 # Heavy Load (1000 workers)
