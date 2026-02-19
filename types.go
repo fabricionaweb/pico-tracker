@@ -4,6 +4,7 @@ import (
 	"encoding/hex"
 	"net"
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
@@ -41,12 +42,14 @@ type Torrent struct {
 	completed int
 }
 
+//nolint:govet // Field alignment is acceptable
 type Tracker struct {
 	torrents      map[HashID]*Torrent
 	rateLimiter   map[string]*rateLimitEntry
 	wg            sync.WaitGroup
 	mu            sync.RWMutex
 	rateLimiterMu sync.Mutex
+	whitelist     atomic.Pointer[map[HashID]struct{}]
 }
 
 type rateLimitEntry struct {

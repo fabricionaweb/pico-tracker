@@ -54,6 +54,12 @@ func (tr *Tracker) handleAnnounce(conn net.PacketConn, addr *net.UDPAddr, packet
 	}
 
 	infoHash := NewHashID(packet[16:36])
+	if !tr.isWhitelisted(infoHash) {
+		info("announce rejected: info_hash %s not whitelisted from %s", infoHash.String(), addr)
+		tr.sendError(conn, addr, transactionID, "torrent not authorized")
+		return
+	}
+
 	peerID := NewHashID(packet[36:56])
 	// Skip downloaded (8 bytes)
 	left := binary.BigEndian.Uint64(packet[64:72])
@@ -159,24 +165,27 @@ func (tr *Tracker) handleScrape(conn net.PacketConn, addr *net.UDPAddr, packet [
 		infoHash := NewHashID(packet[16+i*20 : 16+(i+1)*20])
 
 		var seeders, completed, leechers uint32
-		torrent := tr.getTorrent(infoHash)
-		if torrent != nil {
-			torrent.mu.RLock()
-			//nolint:gosec // seeders/leechers/completed are bounded int counts
-			seeders = uint32(torrent.seeders)
-			//nolint:gosec // seeders/leechers/completed are bounded int counts
-			completed = uint32(torrent.completed)
-			//nolint:gosec // seeders/leechers/completed are bounded int counts
-			leechers = uint32(torrent.leechers)
-			torrent.mu.RUnlock()
+		if tr.isWhitelisted(infoHash) {
+			torrent := tr.getTorrent(infoHash)
+			if torrent != nil {
+				torrent.mu.RLock()
+				//nolint:gosec // seeders/leechers/completed are bounded int counts
+				seeders = uint32(torrent.seeders)
+				//nolint:gosec // seeders/leechers/completed are bounded int counts
+				completed = uint32(torrent.completed)
+				//nolint:gosec // seeders/leechers/completed are bounded int counts
+				leechers = uint32(torrent.leechers)
+				torrent.mu.RUnlock()
+			}
+			debug("scrape for %s: seeders=%d completed=%d leechers=%d", infoHash.String(), seeders, completed, leechers)
+		} else {
+			debug("scrape filtered: info_hash %s not whitelisted from %s", infoHash.String(), addr)
 		}
 
 		binary.BigEndian.PutUint32(response[offset:offset+4], seeders)
 		binary.BigEndian.PutUint32(response[offset+4:offset+8], completed)
 		binary.BigEndian.PutUint32(response[offset+8:offset+12], leechers)
 		offset += 12
-
-		debug("scrape for %s: seeders=%d completed=%d leechers=%d", infoHash.String(), seeders, completed, leechers)
 	}
 
 	if _, err := conn.WriteTo(response, addr); err != nil {

@@ -30,10 +30,12 @@ func info(format string, v ...any) {
 	log.Printf("[INFO] "+format, v...)
 }
 
+//nolint:govet // Field alignment is acceptable
 type config struct {
-	secret      string
-	port        int
-	showVersion bool
+	secret        string
+	port          int
+	showVersion   bool
+	whitelistPath string
 }
 
 // parseFlags parses command-line flags and returns configuration.
@@ -52,6 +54,8 @@ func parseFlags(args []string) *config {
 		defaultSecret = fallbackSecret
 	}
 
+	defaultWhitelist := os.Getenv("PICO_TRACKER__WHITELIST")
+
 	debugDefault := os.Getenv("DEBUG") != ""
 
 	fs := flag.NewFlagSet("pico-tracker", flag.ExitOnError)
@@ -60,6 +64,10 @@ func parseFlags(args []string) *config {
 
 	secret := fs.String("secret", "", "secret key for connection ID signing [env PICO_TRACKER__SECRET]")
 	fs.StringVar(secret, "s", "", "alias to -secret")
+
+	whitelist := fs.String("whitelist", defaultWhitelist,
+		"path to whitelist file for private tracker mode [env PICO_TRACKER__WHITELIST]")
+	fs.StringVar(whitelist, "w", defaultWhitelist, "alias to -whitelist")
 
 	debug := fs.Bool("debug", debugDefault, "enable debug logs [env DEBUG]")
 	fs.BoolVar(debug, "d", debugDefault, "alias to -debug")
@@ -85,9 +93,10 @@ func parseFlags(args []string) *config {
 	}
 
 	return &config{
-		port:        *port,
-		secret:      *secret,
-		showVersion: *showVersion,
+		port:          *port,
+		secret:        *secret,
+		showVersion:   *showVersion,
+		whitelistPath: *whitelist,
 	}
 }
 
@@ -131,6 +140,10 @@ func main() {
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
+
+	if cfg.whitelistPath != "" {
+		startWhitelistManager(ctx, cfg.whitelistPath, &tr.whitelist)
+	}
 
 	go tr.listen(ctx, conn4)
 	if conn6 != nil {
