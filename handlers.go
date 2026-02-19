@@ -330,6 +330,7 @@ func (tr *Tracker) handlePacket(conn net.PacketConn, addr *net.UDPAddr, packet [
 			addr, connectionID, action, transactionID)
 	}
 
+	// Validate connection ID based on action type before handling
 	switch action {
 	case actionConnect:
 		if connectionID != protocolID {
@@ -337,31 +338,33 @@ func (tr *Tracker) handlePacket(conn net.PacketConn, addr *net.UDPAddr, packet [
 			tr.sendError(conn, addr, transactionID, "invalid protocol ID")
 			return
 		}
-		tr.handleConnect(conn, addr, transactionID)
-
 	case actionAnnounce, actionScrape:
 		if !validateConnectionID(connectionID, addr) {
 			debug("invalid or expired connection ID from %s: %d", addr, connectionID)
 			tr.sendError(conn, addr, transactionID, "invalid connection ID")
 			return
 		}
-		if action == actionAnnounce {
-			tr.handleAnnounce(conn, addr, packet, transactionID)
-		} else {
-			tr.handleScrape(conn, addr, packet, transactionID)
-		}
-
 	default:
-		// tr.sendError will add debug and skip debug for loopback (healthcheck)
+		// Unknown action - special handling for loopback
 		if fromLoopback {
 			if _, err := conn.WriteTo([]byte("unknown action\n"), addr); err != nil {
 				debug("failed to respond to loopback: %v", err)
 			}
 			return
 		}
-
 		debug("unknown action %d from %s", action, addr)
 		tr.sendError(conn, addr, transactionID, "unknown action")
+		return
+	}
+
+	// Handle the validated action
+	switch action {
+	case actionConnect:
+		tr.handleConnect(conn, addr, transactionID)
+	case actionAnnounce:
+		tr.handleAnnounce(conn, addr, packet, transactionID)
+	case actionScrape:
+		tr.handleScrape(conn, addr, packet, transactionID)
 	}
 }
 
