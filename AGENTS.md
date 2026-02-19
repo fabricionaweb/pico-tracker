@@ -95,8 +95,12 @@
 - Check for untracked files
 - Verify no secrets before committing
 - Use conventional commit format: `<type>: <description>` (e.g., `feat:`, `fix:`, `refactor:`, `docs:`, `chore:`)
-- **REQUIRED**: Add co-author trailer: `git commit -m "<message>" --trailer "Co-authored-by: <AI-Model-Name> <<model-contact>>"` (search git log with `--format="%(trailers:key=Co-authored-by)" -4` or more to find exact format used)
 - **ALWAYS run lint before committing**: Run `golangci-lint run` and fix any issues before committing
+- **REQUIRED**: Add a co-author trailer for yourself: `git commit -m "<message>" --trailer "Co-authored-by: <Name> <<Email>>"`
+  - **Step 1:** Identify your exact model name **and version** (e.g., Kimi K25, GPT-4o, Claude 3.5 Sonnet). Do not just use the broad family name.
+  - **Step 2:** Search the git log to find your established format for this specific version. Run: `git log --grep="Co-authored-by:.*<Your-Exact-Version>" -n 6 --format="%(trailers:key=Co-authored-by)"`
+  - **Step 3:** - *If found:* Use the exact string returned to maintain consistency.
+    - *If not found (first time use):* Default to `Co-authored-by: <Your-Exact-Version> <<model-identifier>@ai-agent.local>` (e.g., `Co-authored-by: Kimi K25 <kimi-k25@ai-agent.local>`).
 
 ## Linting
 
