@@ -251,10 +251,11 @@ func (tr *Tracker) handlePacket(conn net.PacketConn, addr *net.UDPAddr, packet [
 // listen reads incoming UDP packets and dispatches them to handlers in goroutines
 func (tr *Tracker) listen(ctx context.Context, conn *net.UDPConn) {
 	for {
-		readBuf := make([]byte, maxPacketSize)
+		readBuf := getBuffer()
 
-		n, clientAddr, err := conn.ReadFromUDP(readBuf)
+		n, clientAddr, err := conn.ReadFromUDP(*readBuf)
 		if err != nil {
+			putBuffer(readBuf)
 			if ctx.Err() != nil {
 				return
 			}
@@ -262,13 +263,14 @@ func (tr *Tracker) listen(ctx context.Context, conn *net.UDPConn) {
 			continue
 		}
 
-		// Slice the buffer to the actual packet size - the goroutine owns this buffer now
-		packet := readBuf[:n]
+		// Resize slice to actual data size
+		*readBuf = (*readBuf)[:n]
 
 		tr.wg.Add(1)
-		go func(addr *net.UDPAddr, pkt []byte) {
+		go func(addr *net.UDPAddr, buf *[]byte) {
 			defer tr.wg.Done()
-			tr.handlePacket(conn, addr, pkt)
-		}(clientAddr, packet)
+			defer putBuffer(buf)
+			tr.handlePacket(conn, addr, *buf)
+		}(clientAddr, readBuf)
 	}
 }

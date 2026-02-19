@@ -11,6 +11,29 @@ import (
 
 var secretKey [32]byte // secret for syn-cookie connection ID signing (prevents IP spoofing)
 
+// bufferPool reuses 1500-byte read buffers to reduce allocations and GC pressure
+var bufferPool = sync.Pool{
+	New: func() any {
+		buf := make([]byte, maxPacketSize)
+		return &buf
+	},
+}
+
+func getBuffer() *[]byte {
+	//nolint:errcheck // Buffer pool always returns *[]byte
+	buf := bufferPool.Get().(*[]byte)
+	// Restore full capacity - putBuffer resets the slice to [:0] for the pool,
+	// but net.UDPConn.ReadFromUDP respects len(buf) not cap(buf). Without this,
+	// reading into the buffer would see length 0 and return n=0.
+	*buf = (*buf)[:cap(*buf)]
+	return buf
+}
+
+func putBuffer(buf *[]byte) {
+	*buf = (*buf)[:0]
+	bufferPool.Put(buf)
+}
+
 // peerSlicePool reuses peerInfo slices for getPeers to reduce allocations
 // Maximum capacity is maxPeersPerPacketV4 (200) which covers typical use
 var peerSlicePool = sync.Pool{
