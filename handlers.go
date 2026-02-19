@@ -63,6 +63,69 @@ func (tr *Tracker) handleConnect(conn net.PacketConn, addr *net.UDPAddr, transac
 	}
 }
 
+// calculateNumWant determines the number of peers to return based on client request
+func calculateNumWant(numWantRaw uint32, maxWant int) int {
+	// num_want 0 or 0xFFFFFFFF (-1 but we have it unsigned 32bit) means "default"
+	if numWantRaw == 0 || numWantRaw == 0xFFFFFFFF {
+		return defaultNumWant
+	}
+	// #nosec G115 -- numWantRaw is validated as <= maxWant
+	if numWantRaw > uint32(maxWant) {
+		return maxWant
+	}
+	return int(numWantRaw)
+}
+
+// determineClientIP extracts the client's IP from the announce request.
+// Returns the client IP, whether it's valid, and an error message if invalid.
+func determineClientIP(addr *net.UDPAddr, ipAddr uint32) (clientIP net.IP, isValid bool, errMsg string) {
+	clientIsV4 := addr.IP.To4() != nil
+	clientIP = addr.IP
+
+	if ipAddr != 0 {
+		if clientIsV4 {
+			clientIP = net.IP{byte(ipAddr >> 24), byte(ipAddr >> 16), byte(ipAddr >> 8), byte(ipAddr)}
+		} else {
+			// IPv6 clients must send IP field as 0 (per BEP 15)
+			return nil, false, "IP address must be 0 for IPv6"
+		}
+	}
+
+	return clientIP, true, ""
+}
+
+// buildAnnounceResponse creates the announce response buffer
+func buildAnnounceResponse(peers []byte, seeders, leechers int, transactionID uint32, clientIsV4 bool) []byte {
+	responseSize := announceHeaderSize + len(peers)
+	var response []byte
+	switch {
+	case clientIsV4 && responseSize <= maxStackAnnounceSizeV4:
+		var buf [maxStackAnnounceSizeV4]byte
+		response = buf[:responseSize]
+	case !clientIsV4 && responseSize <= maxStackAnnounceSizeV6:
+		var buf [maxStackAnnounceSizeV6]byte
+		response = buf[:responseSize]
+	default:
+		response = make([]byte, responseSize)
+	}
+
+	binary.BigEndian.PutUint32(response[0:4], actionAnnounce)
+	binary.BigEndian.PutUint32(response[4:8], transactionID)
+	interval := announceInterval * int(time.Minute/time.Second)
+	//nolint:gosec // interval is bounded by constants
+	binary.BigEndian.PutUint32(response[8:12], uint32(interval))
+	//nolint:gosec // leechers/seeders are bounded counts
+	binary.BigEndian.PutUint32(response[12:16], uint32(leechers))
+	//nolint:gosec // seeders are bounded counts
+	binary.BigEndian.PutUint32(response[16:20], uint32(seeders))
+	// Fast copy: only copy if there are peers (avoids slice bounds check in empty case)
+	if len(peers) > 0 {
+		copy(response[20:], peers)
+	}
+
+	return response
+}
+
 // handleAnnounce is the main interaction - a client tells us they're downloading
 // and asks for a list of other people to connect to
 // Announce request format:
@@ -104,25 +167,12 @@ func (tr *Tracker) handleAnnounce(conn net.PacketConn, addr *net.UDPAddr, packet
 		maxWant = maxPeersPerPacketV6
 		peerSize = 18 // IPv6 peer size
 	}
-	numWant := defaultNumWant
-	// num_want 0 or 0xFFFFFFFF (-1 but we have it unsigned 32bit) means "default"
-	if numWantRaw != 0 && numWantRaw != 0xFFFFFFFF {
-		// #nosec G115 -- numWantRaw is validated as <= maxWant before this
-		if numWantRaw > uint32(maxWant) {
-			numWant = maxWant
-		} else {
-			numWant = int(numWantRaw)
-		}
-	}
 
-	// Determine client's IP: use packet source by default, but IPv4 clients can specify a custom IP
-	clientIP := addr.IP
-	if ipAddr != 0 && clientIsV4 {
-		clientIP = net.IP{byte(ipAddr >> 24), byte(ipAddr >> 16), byte(ipAddr >> 8), byte(ipAddr)}
-	}
-	// IPv6 clients must send IP field as 0 (per BEP 15)
-	if ipAddr != 0 && !clientIsV4 {
-		tr.sendError(conn, addr, transactionID, "IP address must be 0 for IPv6")
+	numWant := calculateNumWant(numWantRaw, maxWant)
+
+	clientIP, valid, errMsg := determineClientIP(addr, ipAddr)
+	if !valid {
+		tr.sendError(conn, addr, transactionID, errMsg)
 		return
 	}
 
@@ -143,34 +193,7 @@ func (tr *Tracker) handleAnnounce(conn net.PacketConn, addr *net.UDPAddr, packet
 	peers, seeders, leechers := torrent.getPeers(peerID, numWant, clientIsV4, peerSize)
 	debug("returning %d seeders, %d leechers, %d peers", seeders, leechers, len(peers)/peerSize)
 
-	// Announce response format: [action:4][transaction_id:4][interval:4][leechers:4][seeders:4][peers:variable]
-	// Stack-allocate small responses to avoid heap allocation
-	responseSize := announceHeaderSize + len(peers)
-	var response []byte
-	switch {
-	case clientIsV4 && responseSize <= maxStackAnnounceSizeV4:
-		var buf [maxStackAnnounceSizeV4]byte
-		response = buf[:responseSize]
-	case !clientIsV4 && responseSize <= maxStackAnnounceSizeV6:
-		var buf [maxStackAnnounceSizeV6]byte
-		response = buf[:responseSize]
-	default:
-		response = make([]byte, responseSize)
-	}
-
-	binary.BigEndian.PutUint32(response[0:4], actionAnnounce)
-	binary.BigEndian.PutUint32(response[4:8], transactionID)
-	interval := announceInterval * int(time.Minute/time.Second)
-	//nolint:gosec // interval is bounded by constants
-	binary.BigEndian.PutUint32(response[8:12], uint32(interval))
-	//nolint:gosec // leechers/seeders are bounded counts
-	binary.BigEndian.PutUint32(response[12:16], uint32(leechers))
-	//nolint:gosec // seeders are bounded counts
-	binary.BigEndian.PutUint32(response[16:20], uint32(seeders))
-	// Fast copy: only copy if there are peers (avoids slice bounds check in empty case)
-	if len(peers) > 0 {
-		copy(response[20:], peers)
-	}
+	response := buildAnnounceResponse(peers, seeders, leechers, transactionID, clientIsV4)
 
 	if _, err := conn.WriteTo(response, addr); err != nil {
 		info("failed to send announce response to %s: %v", addr, err)
