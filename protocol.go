@@ -19,6 +19,15 @@ var bufferPool = sync.Pool{
 	},
 }
 
+// peerSlicePool reuses peerInfo slices for getPeers to reduce allocations
+// Maximum capacity is maxPeersPerPacketV4 (200) which covers typical use
+var peerSlicePool = sync.Pool{
+	New: func() any {
+		s := make([]peerInfo, 0, maxPeersPerPacketV4)
+		return &s
+	},
+}
+
 func getBuffer() *[]byte {
 	//nolint:errcheck // Buffer pool always returns *[]byte
 	return bufferPool.Get().(*[]byte)
@@ -27,6 +36,16 @@ func getBuffer() *[]byte {
 func putBuffer(buf *[]byte) {
 	*buf = (*buf)[:0]
 	bufferPool.Put(buf)
+}
+
+func getPeerSlice() *[]peerInfo {
+	//nolint:errcheck // Peer slice pool always returns *[]peerInfo
+	return peerSlicePool.Get().(*[]peerInfo)
+}
+
+func putPeerSlice(s *[]peerInfo) {
+	*s = (*s)[:0]
+	peerSlicePool.Put(s)
 }
 
 // Protocol constants for the UDP Tracker Protocol (BEP 15)

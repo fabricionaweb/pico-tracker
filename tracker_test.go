@@ -415,7 +415,7 @@ func TestCheckRateLimit_WindowReset(t *testing.T) {
 
 	// Manually set window start to past to simulate window expiration
 	tr.rateLimiterMu.Lock()
-	tr.rateLimiter[addr.String()].windowStart = time.Now().Add(-3 * time.Minute)
+	tr.rateLimiter[MakeRateLimitKey(addr)].windowStart = time.Now().Add(-3 * time.Minute)
 	tr.rateLimiterMu.Unlock()
 
 	// Should be allowed after window expires
@@ -426,7 +426,7 @@ func TestCheckRateLimit_WindowReset(t *testing.T) {
 
 	// Verify counter was reset
 	tr.rateLimiterMu.Lock()
-	count := tr.rateLimiter[addr.String()].count
+	count := tr.rateLimiter[MakeRateLimitKey(addr)].count
 	tr.rateLimiterMu.Unlock()
 	if count != 1 {
 		t.Errorf("count = %d, want 1 after window reset", count)

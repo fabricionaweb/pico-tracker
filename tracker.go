@@ -9,11 +9,17 @@ import (
 
 // Tracker methods
 
+// peerInfo is a lightweight struct for copying peer data out of locks
+type peerInfo struct {
+	ip   net.IP
+	port uint16
+}
+
 // checkRateLimit enforces per-IP rate limiting on connect requests using a sliding window
 // Returns (allowed, timeRemaining) - timeRemaining is 0 if allowed, otherwise the duration
 // until the client can retry. This prevents UDP amplification attacks
 func (tr *Tracker) checkRateLimit(addr *net.UDPAddr) (allowed bool, timeRemaining time.Duration) {
-	key := addr.String()
+	key := MakeRateLimitKey(addr)
 	window := rateLimitWindow * time.Minute
 
 	tr.rateLimiterMu.Lock()
@@ -39,6 +45,23 @@ func (tr *Tracker) checkRateLimit(addr *net.UDPAddr) (allowed bool, timeRemainin
 	}
 
 	return false, window - elapsed
+}
+
+// MakeRateLimitKey creates an efficient string key from UDPAddr without allocations
+// Format: 16 bytes of IP (padded) + 2 bytes of port as string
+// Exported for use in tests.
+func MakeRateLimitKey(addr *net.UDPAddr) string {
+	// For IPv4, To16() gives us 16 bytes; for IPv6 it's already 16 bytes
+	ip := addr.IP.To16()
+	if ip == nil {
+		ip = net.IPv6zero
+	}
+
+	// Build key: 16 bytes IP + 2 bytes port = 18 bytes
+	var key [18]byte
+	copy(key[:16], ip)
+	binary.BigEndian.PutUint16(key[16:18], uint16(addr.Port))
+	return string(key[:])
 }
 
 func (tr *Tracker) getOrCreateTorrent(hash HashID) *Torrent {
@@ -120,39 +143,45 @@ func (t *Torrent) getPeers(
 	exclude HashID, numWant int, clientIsV4 bool, peerSize int,
 ) (peers []byte, seeders, leechers int) {
 	t.mu.RLock()
-	defer t.mu.RUnlock()
-
 	seeders, leechers = t.seeders, t.leechers
 
-	var peerIDs []HashID
+	// Get pooled slice to collect matching peers
+	allPeersPtr := getPeerSlice()
+	allPeers := *allPeersPtr
+
+	// Collect all matching peers
 	for id, p := range t.peers {
 		if id != exclude && (p.IP.To4() != nil) == clientIsV4 {
-			peerIDs = append(peerIDs, id)
+			allPeers = append(allPeers, peerInfo{ip: p.IP, port: p.Port})
 		}
 	}
+	t.mu.RUnlock()
 
-	if len(peerIDs) == 0 {
+	// Update pointer in case slice was reallocated
+	*allPeersPtr = allPeers
+
+	if len(allPeers) == 0 {
+		putPeerSlice(allPeersPtr)
 		return nil, seeders, leechers
 	}
 
-	numPeers := min(numWant, len(peerIDs))
+	// Randomly select peers with a starting offset for fair distribution
+	numPeers := min(numWant, len(allPeers))
 	peers = make([]byte, 0, numPeers*peerSize)
 
-	// Start at random offset for fair peer distribution across clients
 	//nolint:gosec // crypto/rand not needed for peer selection
-	start := rand.Intn(len(peerIDs))
+	start := rand.Intn(len(allPeers))
 	for i := range numPeers {
-		idx := (start + i) % len(peerIDs)
-		p := t.peers[peerIDs[idx]]
-
+		p := allPeers[(start+i)%len(allPeers)]
 		if clientIsV4 {
-			peers = append(peers, p.IP.To4()...)
+			peers = append(peers, p.ip.To4()...)
 		} else {
-			peers = append(peers, p.IP.To16()...)
+			peers = append(peers, p.ip.To16()...)
 		}
-		peers = binary.BigEndian.AppendUint16(peers, p.Port)
+		peers = binary.BigEndian.AppendUint16(peers, p.port)
 	}
 
+	putPeerSlice(allPeersPtr)
 	return peers, seeders, leechers
 }
 
