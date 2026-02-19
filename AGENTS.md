@@ -104,10 +104,14 @@
 
 ## Linting
 
-### Before Committing
-- Always run `golangci-lint run` to check for lint issues
-- Fix any lint errors before committing
-- Do not add new lint issues to the codebase
+### Before Committing (MANDATORY)
+- **MUST** run `golangci-lint run --timeout=5m` and fix ALL issues before committing
+- **MUST NOT** commit code with lint errors - this will fail CI
+- **MUST NOT** add new lint issues to the codebase
+- If linting fails, fix the issues before proceeding with any commit
+
+### Why Strict?
+CI runs the exact same lint check. Any lint error that passes locally will fail in CI. Always verify with `golangci-lint run --timeout=5m` before considering work complete.
 
 ### Config
 - This project uses golangci-lint (see `.golangci.yml`)

@@ -46,4 +46,5 @@
 - [ ] Follows project conventions
 
 ### Commands to Run
-- Go: `go build`, `go vet`, `gofmt`, `go mod tidy`
+- Go: `go build`, `go vet`, `gofmt`, `go mod tidy`, `golangci-lint run --timeout=5m`
+- **CRITICAL**: `golangci-lint run --timeout=5m` must pass before any commit
