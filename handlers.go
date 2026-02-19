@@ -187,11 +187,7 @@ func (tr *Tracker) handleScrape(conn net.PacketConn, addr *net.UDPAddr, packet [
 // handlePacket processes any incoming UDP packet and routes it to the right handler
 // based on the action field. Connection ID validation is performed for announce/scrape
 // Packet header format: [connection_id:8][action:4][transaction_id:4]
-func (tr *Tracker) handlePacket(ctx context.Context, conn net.PacketConn, addr *net.UDPAddr, packet []byte) {
-	if ctx.Err() != nil {
-		return
-	}
-
+func (tr *Tracker) handlePacket(conn net.PacketConn, addr *net.UDPAddr, packet []byte) {
 	if len(packet) < 16 {
 		debug("packet too short (%d bytes) from %s", len(packet), addr)
 		return
@@ -246,32 +242,24 @@ func (tr *Tracker) handlePacket(ctx context.Context, conn net.PacketConn, addr *
 // listen reads incoming UDP packets and dispatches them to handlers in goroutines
 func (tr *Tracker) listen(ctx context.Context, conn *net.UDPConn) {
 	for {
-		readBuf := getBuffer()
+		readBuf := make([]byte, maxPacketSize)
 
-		n, clientAddr, err := conn.ReadFromUDP(*readBuf)
+		n, clientAddr, err := conn.ReadFromUDP(readBuf)
 		if err != nil {
-			putBuffer(readBuf)
 			if ctx.Err() != nil {
 				return
 			}
-
 			log.Printf("[ERROR] Failed to read UDP packet: %v", err)
 			continue
 		}
 
-		if n == 0 {
-			putBuffer(readBuf)
-			continue
-		}
-
-		packet := make([]byte, n)
-		copy(packet, (*readBuf)[:n])
-		putBuffer(readBuf)
+		// Slice the buffer to the actual packet size - the goroutine owns this buffer now
+		packet := readBuf[:n]
 
 		tr.wg.Add(1)
 		go func(addr *net.UDPAddr, pkt []byte) {
 			defer tr.wg.Done()
-			tr.handlePacket(ctx, conn, addr, pkt)
+			tr.handlePacket(conn, addr, pkt)
 		}(clientAddr, packet)
 	}
 }

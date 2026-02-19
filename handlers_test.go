@@ -2,7 +2,6 @@ package main
 
 import (
 	"bytes"
-	"context"
 	"crypto/sha256"
 	"encoding/binary"
 	"encoding/hex"
@@ -449,7 +448,7 @@ func TestHandlePacket_PacketTooShort(t *testing.T) {
 
 	packet := make([]byte, 8)
 
-	tr.handlePacket(context.Background(), conn, addr, packet)
+	tr.handlePacket(conn, addr, packet)
 
 	if len(mock.writtenData) != 0 {
 		t.Error("should not respond to too-short packet")
@@ -467,7 +466,7 @@ func TestHandlePacket_InvalidProtocolID(t *testing.T) {
 	binary.BigEndian.PutUint32(packet[8:12], actionConnect)
 	binary.BigEndian.PutUint32(packet[12:16], 12345)
 
-	tr.handlePacket(context.Background(), conn, addr, packet)
+	tr.handlePacket(conn, addr, packet)
 
 	action := binary.BigEndian.Uint32(mock.writtenData[0:4])
 	if action != actionError {
@@ -486,7 +485,7 @@ func TestHandlePacket_InvalidConnectionID(t *testing.T) {
 	binary.BigEndian.PutUint32(packet[8:12], actionAnnounce)
 	binary.BigEndian.PutUint32(packet[12:16], 12345)
 
-	tr.handlePacket(context.Background(), conn, addr, packet)
+	tr.handlePacket(conn, addr, packet)
 
 	action := binary.BigEndian.Uint32(mock.writtenData[0:4])
 	if action != actionError {
@@ -505,7 +504,7 @@ func TestHandlePacket_UnknownAction(t *testing.T) {
 	binary.BigEndian.PutUint32(packet[8:12], 99) // unknown action
 	binary.BigEndian.PutUint32(packet[12:16], 12345)
 
-	tr.handlePacket(context.Background(), conn, addr, packet)
+	tr.handlePacket(conn, addr, packet)
 
 	action := binary.BigEndian.Uint32(mock.writtenData[0:4])
 	if action != actionError {
@@ -524,7 +523,7 @@ func TestHandlePacket_ConnectAction(t *testing.T) {
 	binary.BigEndian.PutUint32(packet[8:12], actionConnect)
 	binary.BigEndian.PutUint32(packet[12:16], 12345)
 
-	tr.handlePacket(context.Background(), conn, addr, packet)
+	tr.handlePacket(conn, addr, packet)
 
 	action := binary.BigEndian.Uint32(mock.writtenData[0:4])
 	if action != actionConnect {
@@ -548,7 +547,7 @@ func TestHandlePacket_AnnounceAction(t *testing.T) {
 	copy(packet[36:56], "peer1_______________")
 	binary.BigEndian.PutUint16(packet[96:98], 6881)
 
-	tr.handlePacket(context.Background(), conn, addr, packet)
+	tr.handlePacket(conn, addr, packet)
 
 	action := binary.BigEndian.Uint32(mock.writtenData[0:4])
 	if action != actionAnnounce {
@@ -570,32 +569,11 @@ func TestHandlePacket_ScrapeAction(t *testing.T) {
 	binary.BigEndian.PutUint32(packet[12:16], 12345)
 	copy(packet[16:36], "torrent12345678901")
 
-	tr.handlePacket(context.Background(), conn, addr, packet)
+	tr.handlePacket(conn, addr, packet)
 
 	action := binary.BigEndian.Uint32(mock.writtenData[0:4])
 	if action != actionScrape {
 		t.Errorf("action = %d, want %d", action, actionScrape)
-	}
-}
-
-func TestHandlePacket_CancelledContext(t *testing.T) {
-	tr := setupTracker(t)
-	mock := &mockPacketConn{}
-	conn := mock
-	addr := &net.UDPAddr{IP: net.ParseIP("192.168.1.1"), Port: 6881}
-
-	ctx, cancel := context.WithCancel(context.Background())
-	cancel()
-
-	packet := make([]byte, 16)
-	binary.BigEndian.PutUint64(packet[0:8], protocolID)
-	binary.BigEndian.PutUint32(packet[8:12], actionConnect)
-	binary.BigEndian.PutUint32(packet[12:16], 12345)
-
-	tr.handlePacket(ctx, conn, addr, packet)
-
-	if len(mock.writtenData) != 0 {
-		t.Error("should not respond when context is canceled")
 	}
 }
 
@@ -758,7 +736,7 @@ func TestHandlePacket_LoopbackUnknownAction(t *testing.T) {
 	binary.BigEndian.PutUint32(packet[8:12], 99) // unknown action
 	binary.BigEndian.PutUint32(packet[12:16], 12345)
 
-	tr.handlePacket(context.Background(), conn, addr, packet)
+	tr.handlePacket(conn, addr, packet)
 
 	// Loopback should get plain text response, not error action
 	if string(mock.writtenData) != "unknown action\n" {
@@ -1201,7 +1179,7 @@ func TestHandleAnnounce_InvalidConnectionID(t *testing.T) {
 	copy(packet[36:56], "peer1_______________")
 	binary.BigEndian.PutUint16(packet[96:98], 6881)
 
-	tr.handlePacket(context.Background(), conn, addr, packet)
+	tr.handlePacket(conn, addr, packet)
 
 	action := binary.BigEndian.Uint32(mock.writtenData[0:4])
 	if action != actionError {
@@ -1230,7 +1208,7 @@ func TestHandleScrape_InvalidConnectionID(t *testing.T) {
 	binary.BigEndian.PutUint32(packet[12:16], 12345)
 	copy(packet[16:36], "torrent12345678901")
 
-	tr.handlePacket(context.Background(), conn, addr, packet)
+	tr.handlePacket(conn, addr, packet)
 
 	action := binary.BigEndian.Uint32(mock.writtenData[0:4])
 	if action != actionError {
@@ -1253,7 +1231,7 @@ func TestFullFlow_ConnectAnnounceScrape(t *testing.T) {
 	binary.BigEndian.PutUint32(connectPacket[8:12], actionConnect)
 	binary.BigEndian.PutUint32(connectPacket[12:16], 10001)
 
-	tr.handlePacket(context.Background(), conn, addr, connectPacket)
+	tr.handlePacket(conn, addr, connectPacket)
 
 	action := binary.BigEndian.Uint32(mock.writtenData[0:4])
 	if action != actionConnect {
@@ -1275,7 +1253,7 @@ func TestFullFlow_ConnectAnnounceScrape(t *testing.T) {
 	binary.BigEndian.PutUint64(announcePacket[64:72], 1000)
 	binary.BigEndian.PutUint16(announcePacket[96:98], 6881)
 
-	tr.handlePacket(context.Background(), conn, addr, announcePacket)
+	tr.handlePacket(conn, addr, announcePacket)
 
 	action = binary.BigEndian.Uint32(mock.writtenData[0:4])
 	if action != actionAnnounce {
@@ -1301,7 +1279,7 @@ func TestFullFlow_ConnectAnnounceScrape(t *testing.T) {
 	binary.BigEndian.PutUint32(scrapePacket[12:16], 10003)
 	copy(scrapePacket[16:36], "torrent12345678901")
 
-	tr.handlePacket(context.Background(), conn, addr, scrapePacket)
+	tr.handlePacket(conn, addr, scrapePacket)
 
 	action = binary.BigEndian.Uint32(mock.writtenData[0:4])
 	if action != actionScrape {
