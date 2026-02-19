@@ -189,10 +189,29 @@ func (t *Torrent) getPeers(
 // Error response format: [action:4][transaction_id:4][error_message:variable]
 // Fixed header: 4 + 4 = 8 bytes
 func (tr *Tracker) sendError(conn net.PacketConn, addr *net.UDPAddr, transactionID uint32, message string) {
-	response := make([]byte, 8+len(message))
+	const (
+		errorHeaderSize = 8 // action:4 + transaction_id:4
+		maxStackSize    = 128
+		maxMsgLen       = maxStackSize - errorHeaderSize // 120 bytes for message
+	)
+
+	msgLen := len(message)
+	totalSize := errorHeaderSize + msgLen
+
+	var response []byte
+	if msgLen <= maxMsgLen {
+		// Stack-allocate small errors to avoid heap allocation
+		var buf [maxStackSize]byte
+		response = buf[:totalSize]
+	} else {
+		// Heap allocate only for large messages
+		response = make([]byte, totalSize)
+	}
+
 	binary.BigEndian.PutUint32(response[0:4], actionError)
 	binary.BigEndian.PutUint32(response[4:8], transactionID)
 	copy(response[8:], message)
+
 	if _, err := conn.WriteTo(response, addr); err != nil {
 		info("failed to send error to %s: %v", addr, err)
 	} else {

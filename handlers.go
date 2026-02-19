@@ -28,12 +28,13 @@ func (tr *Tracker) handleConnect(conn net.PacketConn, addr *net.UDPAddr, transac
 	connectionID := generateConnectionID(addr)
 
 	// Connect response format: [action:4][transaction_id:4][connection_id:8]
-	response := make([]byte, 16)
+	// Stack-allocate fixed 16-byte response to avoid heap allocation
+	var response [16]byte
 	binary.BigEndian.PutUint32(response[0:4], actionConnect)
 	binary.BigEndian.PutUint32(response[4:8], transactionID)
 	binary.BigEndian.PutUint64(response[8:16], connectionID)
 
-	if _, err := conn.WriteTo(response, addr); err != nil {
+	if _, err := conn.WriteTo(response[:], addr); err != nil {
 		info("failed to send connect response to %s: %v", addr, err)
 	} else {
 		debug("sent connect response with connection_id=%d", connectionID)
@@ -122,7 +123,9 @@ func (tr *Tracker) handleAnnounce(conn net.PacketConn, addr *net.UDPAddr, packet
 
 	// Announce response format: [action:4][transaction_id:4][interval:4][leechers:4][seeders:4][peers:variable]
 	// Fixed header: 4 + 4 + 4 + 4 + 4 = 20 bytes
-	response := make([]byte, 20+len(peers))
+	// Pre-allocate exact size needed: 20-byte header + peer data
+	responseSize := 20 + len(peers)
+	response := make([]byte, responseSize)
 	binary.BigEndian.PutUint32(response[0:4], actionAnnounce)
 	binary.BigEndian.PutUint32(response[4:8], transactionID)
 	interval := announceInterval * int(time.Minute/time.Second)
@@ -132,7 +135,10 @@ func (tr *Tracker) handleAnnounce(conn net.PacketConn, addr *net.UDPAddr, packet
 	binary.BigEndian.PutUint32(response[12:16], uint32(leechers))
 	//nolint:gosec // seeders are bounded counts
 	binary.BigEndian.PutUint32(response[16:20], uint32(seeders))
-	copy(response[20:], peers)
+	// Fast copy: only copy if there are peers (avoids slice bounds check in empty case)
+	if len(peers) > 0 {
+		copy(response[20:], peers)
+	}
 
 	if _, err := conn.WriteTo(response, addr); err != nil {
 		info("failed to send announce response to %s: %v", addr, err)
@@ -155,12 +161,15 @@ func (tr *Tracker) handleScrape(conn net.PacketConn, addr *net.UDPAddr, packet [
 
 	// Scrape response format: [action:4][transaction_id:4] + [seeders:4][completed:4][leechers:4] per hash
 	// Fixed header: 4 + 4 = 8 bytes
-	scrapeResponseSize := 8 + numHashes*12
+	// Each torrent entry: 4 + 4 + 4 = 12 bytes
+	const scrapeEntrySize = 12
+	scrapeResponseSize := 8 + numHashes*scrapeEntrySize
 	response := make([]byte, scrapeResponseSize)
 	binary.BigEndian.PutUint32(response[0:4], actionScrape)
 	binary.BigEndian.PutUint32(response[4:8], transactionID)
 
-	offset := 8
+	// Process all hashes in a single pass with pre-calculated offsets
+	dataOffset := 8
 	for i := range numHashes {
 		infoHash := NewHashID(packet[16+i*20 : 16+(i+1)*20])
 
@@ -182,10 +191,11 @@ func (tr *Tracker) handleScrape(conn net.PacketConn, addr *net.UDPAddr, packet [
 			debug("scrape filtered: info_hash %s not whitelisted from %s", infoHash.String(), addr)
 		}
 
-		binary.BigEndian.PutUint32(response[offset:offset+4], seeders)
-		binary.BigEndian.PutUint32(response[offset+4:offset+8], completed)
-		binary.BigEndian.PutUint32(response[offset+8:offset+12], leechers)
-		offset += 12
+		// Write directly to final buffer location to avoid intermediate allocations
+		binary.BigEndian.PutUint32(response[dataOffset:dataOffset+4], seeders)
+		binary.BigEndian.PutUint32(response[dataOffset+4:dataOffset+8], completed)
+		binary.BigEndian.PutUint32(response[dataOffset+8:dataOffset+12], leechers)
+		dataOffset += scrapeEntrySize
 	}
 
 	if _, err := conn.WriteTo(response, addr); err != nil {
