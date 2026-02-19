@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"crypto/sha256"
 	"encoding/binary"
-	"encoding/hex"
 	"fmt"
 	"net"
 	"testing"
@@ -1377,515 +1376,476 @@ func TestSendError_WriteFailure(t *testing.T) {
 	}
 }
 
-// TestHandleScrape_DebugValues is a comprehensive test to debug scrape value issues.
-// It simulates real-world scenarios and reports exactly what values are returned.
-func TestHandleScrape_DebugValues(t *testing.T) {
-	tr := setupTracker(t)
-	mock := &mockPacketConn{}
-	conn := mock
+// Unit tests for helper functions
+
+func TestParseAnnounceRequest_ValidPacket(t *testing.T) {
+	// Create a valid announce packet (98 bytes)
+	packet := make([]byte, 98)
+	binary.BigEndian.PutUint64(packet[0:8], 12345)        // connection_id
+	binary.BigEndian.PutUint32(packet[8:12], 1)           // action
+	binary.BigEndian.PutUint32(packet[12:16], 999)        // transaction_id
+	copy(packet[16:36], "infohash12345678901")            // info_hash (20 bytes)
+	copy(packet[36:56], "peer_id1234567890123")           // peer_id (20 bytes)
+	binary.BigEndian.PutUint64(packet[56:64], 1000000)    // downloaded
+	binary.BigEndian.PutUint64(packet[64:72], 5000)       // left
+	binary.BigEndian.PutUint64(packet[72:80], 100000)     // uploaded
+	binary.BigEndian.PutUint32(packet[80:84], 2)          // event (completed)
+	binary.BigEndian.PutUint32(packet[84:88], 0xC0A80101) // IP (192.168.1.1)
+	binary.BigEndian.PutUint32(packet[88:92], 12345)      // key
+	binary.BigEndian.PutUint32(packet[92:96], 50)         // num_want
+	binary.BigEndian.PutUint16(packet[96:98], 6881)       // port
+
+	req, ok := parseAnnounceRequest(packet)
+	if !ok {
+		t.Fatal("parseAnnounceRequest returned false for valid packet")
+	}
+
+	// Verify info_hash was extracted correctly (should be hex of the 20 bytes we copied)
+	expectedInfoHashBytes := make([]byte, 20)
+	copy(expectedInfoHashBytes, "infohash12345678901")
+	if req.infoHash != NewHashID(expectedInfoHashBytes) {
+		t.Errorf("info_hash mismatch: got %s, want %x", req.infoHash.String(), expectedInfoHashBytes)
+	}
+
+	// Verify peer_id was extracted correctly
+	expectedPeerIDBytes := make([]byte, 20)
+	copy(expectedPeerIDBytes, "peer_id1234567890123")
+	if req.peerID != NewHashID(expectedPeerIDBytes) {
+		t.Errorf("peer_id mismatch: got %s, want %x", req.peerID.String(), expectedPeerIDBytes)
+	}
+	if req.left != 5000 {
+		t.Errorf("left = %d, want 5000", req.left)
+	}
+	if req.event != 2 {
+		t.Errorf("event = %d, want 2 (completed)", req.event)
+	}
+	if req.ipAddr != 0xC0A80101 {
+		t.Errorf("ip_addr = %x, want 0xC0A80101", req.ipAddr)
+	}
+	if req.numWant != 50 {
+		t.Errorf("num_want = %d, want 50", req.numWant)
+	}
+	if req.port != 6881 {
+		t.Errorf("port = %d, want 6881", req.port)
+	}
+}
+
+func TestParseAnnounceRequest_PacketTooShort(t *testing.T) {
+	// Test with packet that's too short
+	packet := make([]byte, 50) // Less than minAnnouncePacketSize (98)
+
+	req, ok := parseAnnounceRequest(packet)
+	if ok {
+		t.Error("parseAnnounceRequest should return false for short packet")
+	}
+	if req.infoHash != (HashID{}) {
+		t.Error("should return zero values for short packet")
+	}
+}
+
+func TestCalculateNumWant_DefaultValues(t *testing.T) {
+	// Test 0 returns defaultNumWant
+	result := calculateNumWant(0, 200)
+	if result != defaultNumWant {
+		t.Errorf("calculateNumWant(0) = %d, want %d", result, defaultNumWant)
+	}
+
+	// Test 0xFFFFFFFF returns defaultNumWant
+	result = calculateNumWant(0xFFFFFFFF, 200)
+	if result != defaultNumWant {
+		t.Errorf("calculateNumWant(0xFFFFFFFF) = %d, want %d", result, defaultNumWant)
+	}
+}
+
+func TestCalculateNumWant_WithinLimit(t *testing.T) {
+	// Test value within limit
+	result := calculateNumWant(50, 200)
+	if result != 50 {
+		t.Errorf("calculateNumWant(50) = %d, want 50", result)
+	}
+}
+
+func TestCalculateNumWant_ExceedsLimit(t *testing.T) {
+	// Test value exceeding limit gets clamped
+	result := calculateNumWant(500, 200)
+	if result != 200 {
+		t.Errorf("calculateNumWant(500, 200) = %d, want 200 (clamped)", result)
+	}
+}
+
+func TestDetermineClientIP_IPv4NoCustomIP(t *testing.T) {
 	addr := &net.UDPAddr{IP: net.ParseIP("192.168.1.1"), Port: 6881}
-	connID := generateConnectionID(addr)
+	clientIP, valid, errMsg := determineClientIP(addr, 0)
+
+	if !valid {
+		t.Errorf("expected valid, got invalid: %s", errMsg)
+	}
+	if clientIP.String() != "192.168.1.1" {
+		t.Errorf("clientIP = %s, want 192.168.1.1", clientIP)
+	}
+}
+
+func TestDetermineClientIP_IPv4WithCustomIP(t *testing.T) {
+	addr := &net.UDPAddr{IP: net.ParseIP("10.0.0.1"), Port: 6881}
+	// Use custom IP 192.168.1.100 (0xC0A80164)
+	clientIP, valid, errMsg := determineClientIP(addr, 0xC0A80164)
+
+	if !valid {
+		t.Errorf("expected valid, got invalid: %s", errMsg)
+	}
+	if clientIP.String() != "192.168.1.100" {
+		t.Errorf("clientIP = %s, want 192.168.1.100", clientIP)
+	}
+}
+
+func TestDetermineClientIP_IPv6WithNonZeroIPField(t *testing.T) {
+	addr := &net.UDPAddr{IP: net.ParseIP("2001:db8::1"), Port: 6881}
+	// IPv6 clients must send IP field as 0
+	clientIP, valid, errMsg := determineClientIP(addr, 0xC0A80101)
+
+	if valid {
+		t.Error("expected invalid for IPv6 with non-zero IP field")
+	}
+	if errMsg != "IP address must be 0 for IPv6" {
+		t.Errorf("error message = %q, want 'IP address must be 0 for IPv6'", errMsg)
+	}
+	if clientIP != nil {
+		t.Error("clientIP should be nil for invalid case")
+	}
+}
+
+func TestDetermineClientIP_IPv6WithZeroIPField(t *testing.T) {
+	addr := &net.UDPAddr{IP: net.ParseIP("2001:db8::1"), Port: 6881}
+	// IPv6 with IP field = 0 is valid
+	clientIP, valid, errMsg := determineClientIP(addr, 0)
+
+	if !valid {
+		t.Errorf("expected valid, got invalid: %s", errMsg)
+	}
+	if clientIP.String() != "2001:db8::1" {
+		t.Errorf("clientIP = %s, want 2001:db8::1", clientIP)
+	}
+}
+
+func TestGetPeerConfig_IPv4(t *testing.T) {
+	peerSize, maxWant := getPeerConfig(true)
+	if peerSize != 6 {
+		t.Errorf("IPv4 peerSize = %d, want 6", peerSize)
+	}
+	if maxWant != maxPeersPerPacketV4 {
+		t.Errorf("IPv4 maxWant = %d, want %d", maxWant, maxPeersPerPacketV4)
+	}
+}
+
+func TestGetPeerConfig_IPv6(t *testing.T) {
+	peerSize, maxWant := getPeerConfig(false)
+	if peerSize != 18 {
+		t.Errorf("IPv6 peerSize = %d, want 18", peerSize)
+	}
+	if maxWant != maxPeersPerPacketV6 {
+		t.Errorf("IPv6 maxWant = %d, want %d", maxWant, maxPeersPerPacketV6)
+	}
+}
+
+func TestUpdateTorrentPeer_EventStopped(t *testing.T) {
+	tr := setupTracker(t)
 	infoHash := NewHashID([]byte("torrent12345678901"))
-
-	t.Log("=== DEBUG: Testing scrape values with different scenarios ===")
-
-	// Scenario 1: Empty torrent (no peers)
-	t.Log("\n--- Scenario 1: Empty torrent (no peers) ---")
-	packet := make([]byte, 36)
-	binary.BigEndian.PutUint64(packet[0:8], connID)
-	binary.BigEndian.PutUint32(packet[8:12], actionScrape)
-	binary.BigEndian.PutUint32(packet[12:16], 10001)
-	copy(packet[16:36], "torrent12345678901")
-
-	tr.handleScrape(conn, addr, packet, 10001)
-
-	if len(mock.writtenData) != 20 {
-		t.Fatalf("expected 20 byte response, got %d", len(mock.writtenData))
-	}
-
-	action := binary.BigEndian.Uint32(mock.writtenData[0:4])
-	txID := binary.BigEndian.Uint32(mock.writtenData[4:8])
-	seeders := binary.BigEndian.Uint32(mock.writtenData[8:12])
-	completed := binary.BigEndian.Uint32(mock.writtenData[12:16])
-	leechers := binary.BigEndian.Uint32(mock.writtenData[16:20])
-
-	t.Logf("Response: action=%d (expected=%d), tx_id=%d", action, actionScrape, txID)
-	t.Logf("Values: seeders=%d, completed=%d, leechers=%d", seeders, completed, leechers)
-
-	if action != actionScrape {
-		t.Errorf("wrong action: got %d, want %d", action, actionScrape)
-	}
-	if txID != 10001 {
-		t.Errorf("wrong transaction_id: got %d, want 10001", txID)
-	}
-	if seeders != 0 || completed != 0 || leechers != 0 {
-		t.Errorf("expected all zeros for empty torrent, got seeders=%d, completed=%d, leechers=%d",
-			seeders, completed, leechers)
-	}
-
-	// Scenario 2: Add one seeder via addPeer
-	t.Log("\n--- Scenario 2: One seeder added directly ---")
-	mock.writtenData = nil
+	peerID := NewHashID([]byte("peer1_______________"))
 	torrent := tr.getOrCreateTorrent(infoHash)
-	torrent.addPeer(NewHashID([]byte("seeder1____________")), net.ParseIP("192.168.1.10"), 6881, 0)
 
-	binary.BigEndian.PutUint32(packet[12:16], 10002) // new transaction ID
-	tr.handleScrape(conn, addr, packet, 10002)
-
-	seeders = binary.BigEndian.Uint32(mock.writtenData[8:12])
-	completed = binary.BigEndian.Uint32(mock.writtenData[12:16])
-	leechers = binary.BigEndian.Uint32(mock.writtenData[16:20])
-	t.Logf("Values: seeders=%d, completed=%d, leechers=%d", seeders, completed, leechers)
-
-	if seeders != 1 {
-		t.Errorf("seeders: got %d, want 1", seeders)
-	}
-	if completed != 1 {
-		t.Errorf("completed: got %d, want 1 (seeder counts as completed)", completed)
-	}
-	if leechers != 0 {
-		t.Errorf("leechers: got %d, want 0", leechers)
+	// First add a peer
+	torrent.addPeer(peerID, net.ParseIP("192.168.1.1"), 6881, 1000)
+	if torrent.leechers != 1 {
+		t.Fatalf("setup failed: expected 1 leecher, got %d", torrent.leechers)
 	}
 
-	// Scenario 3: Add one leecher
-	t.Log("\n--- Scenario 3: Add one leecher ---")
-	mock.writtenData = nil
-	torrent.addPeer(NewHashID([]byte("leecher1___________")), net.ParseIP("192.168.1.11"), 6882, 1000)
+	// Now update with stopped event
+	updateTorrentPeer(torrent, peerID, net.ParseIP("192.168.1.1"), 6881, eventStopped, 1000)
 
-	binary.BigEndian.PutUint32(packet[12:16], 10003)
-	tr.handleScrape(conn, addr, packet, 10003)
-
-	seeders = binary.BigEndian.Uint32(mock.writtenData[8:12])
-	completed = binary.BigEndian.Uint32(mock.writtenData[12:16])
-	leechers = binary.BigEndian.Uint32(mock.writtenData[16:20])
-	t.Logf("Values: seeders=%d, completed=%d, leechers=%d", seeders, completed, leechers)
-
-	if seeders != 1 {
-		t.Errorf("seeders: got %d, want 1", seeders)
+	if torrent.leechers != 0 {
+		t.Errorf("after stopped: leechers = %d, want 0", torrent.leechers)
 	}
-	if completed != 1 {
-		t.Errorf("completed: got %d, want 1 (only seeder counts)", completed)
-	}
-	if leechers != 1 {
-		t.Errorf("leechers: got %d, want 1", leechers)
-	}
+}
 
-	// Scenario 4: Simulate event=completed via re-announce
-	t.Log("\n--- Scenario 4: Leecher becomes seeder (event=completed simulation) ---")
-	mock.writtenData = nil
-	// Simulate the leecher completing by calling addPeer again with left=0
-	torrent.addPeer(NewHashID([]byte("leecher1___________")), net.ParseIP("192.168.1.11"), 6882, 0)
+func TestUpdateTorrentPeer_EventCompleted(t *testing.T) {
+	tr := setupTracker(t)
+	infoHash := NewHashID([]byte("torrent12345678901"))
+	peerID := NewHashID([]byte("peer1_______________"))
+	torrent := tr.getOrCreateTorrent(infoHash)
 
-	binary.BigEndian.PutUint32(packet[12:16], 10004)
-	tr.handleScrape(conn, addr, packet, 10004)
+	// Update with completed event
+	updateTorrentPeer(torrent, peerID, net.ParseIP("192.168.1.1"), 6881, eventCompleted, 0)
 
-	seeders = binary.BigEndian.Uint32(mock.writtenData[8:12])
-	completed = binary.BigEndian.Uint32(mock.writtenData[12:16])
-	leechers = binary.BigEndian.Uint32(mock.writtenData[16:20])
-	t.Logf("Values: seeders=%d, completed=%d, leechers=%d", seeders, completed, leechers)
-
-	if seeders != 2 {
-		t.Errorf("seeders: got %d, want 2 (both are now seeders)", seeders)
-	}
-	if completed != 2 {
-		t.Errorf("completed: got %d, want 2 (both have completed)", completed)
-	}
-	if leechers != 0 {
-		t.Errorf("leechers: got %d, want 0", leechers)
-	}
-
-	// Scenario 5: Verify torrent internal state
-	t.Log("\n--- Scenario 5: Verify internal torrent state ---")
 	torrent.mu.RLock()
-	internalSeeders := torrent.seeders
-	internalLeechers := torrent.leechers
-	internalCompleted := torrent.completed
-	peerCount := len(torrent.peers)
-	torrent.mu.RUnlock()
-
-	t.Logf("Internal state: seeders=%d, leechers=%d, completed=%d, peers=%d",
-		internalSeeders, internalLeechers, internalCompleted, peerCount)
-
-	if internalSeeders != 2 {
-		t.Errorf("internal seeders: got %d, want 2", internalSeeders)
+	defer torrent.mu.RUnlock()
+	if torrent.seeders != 1 {
+		t.Errorf("seeders = %d, want 1", torrent.seeders)
 	}
-	if internalLeechers != 0 {
-		t.Errorf("internal leechers: got %d, want 0", internalLeechers)
+	if torrent.completed != 1 {
+		t.Errorf("completed = %d, want 1", torrent.completed)
 	}
-	if internalCompleted != 2 {
-		t.Errorf("internal completed: got %d, want 2", internalCompleted)
-	}
-	if peerCount != 2 {
-		t.Errorf("peer count: got %d, want 2", peerCount)
-	}
-
-	t.Log("\n=== DEBUG: All scenarios completed ===")
 }
 
-// TestHandleScrape_InfoHashHandling verifies that handleScrape correctly
-// extracts and uses info_hashes from the packet at the right byte offsets.
-func TestHandleScrape_InfoHashHandling(t *testing.T) {
+func TestUpdateTorrentPeer_RegularUpdate(t *testing.T) {
 	tr := setupTracker(t)
-	mock := &mockPacketConn{}
-	conn := mock
-	addr := &net.UDPAddr{IP: net.ParseIP("192.168.1.1"), Port: 6881}
-	connID := generateConnectionID(addr)
-
-	// Create 3 torrents with different info_hashes
-	infoHashA := NewHashID([]byte("AAAAAAAAAAAAAAAAAAAA"))
-	infoHashB := NewHashID([]byte("BBBBBBBBBBBBBBBBBBBB"))
-	infoHashC := NewHashID([]byte("CCCCCCCCCCCCCCCCCCCC"))
-
-	torrentA := tr.getOrCreateTorrent(infoHashA)
-	torrentA.addPeer(NewHashID([]byte("peerA______________")), net.ParseIP("192.168.1.10"), 6881, 0)
-
-	torrentB := tr.getOrCreateTorrent(infoHashB)
-	torrentB.addPeer(NewHashID([]byte("peerB1_____________")), net.ParseIP("192.168.1.11"), 6881, 0)
-	torrentB.addPeer(NewHashID([]byte("peerB2_____________")), net.ParseIP("192.168.1.12"), 6881, 1000)
-
-	// torrentC exists but has no peers
-	tr.getOrCreateTorrent(infoHashC)
-
-	t.Log("=== Testing info_hash extraction in scrape ===")
-
-	// Test 1: Scrape for torrentA only
-	t.Log("\n--- Test 1: Scrape single info_hash (A) ---")
-	mock.writtenData = nil
-	packet := make([]byte, 36) // 16 header + 20 for one info_hash
-	binary.BigEndian.PutUint64(packet[0:8], connID)
-	binary.BigEndian.PutUint32(packet[8:12], actionScrape)
-	binary.BigEndian.PutUint32(packet[12:16], 10001)
-	copy(packet[16:36], "AAAAAAAAAAAAAAAAAAAA") // info_hash A at bytes 16-35
-
-	tr.handleScrape(conn, addr, packet, 10001)
-
-	if len(mock.writtenData) != 20 {
-		t.Fatalf("expected 20 bytes, got %d", len(mock.writtenData))
-	}
-
-	seeders := binary.BigEndian.Uint32(mock.writtenData[8:12])
-	leechers := binary.BigEndian.Uint32(mock.writtenData[16:20])
-	t.Logf("Torrent A: seeders=%d, leechers=%d", seeders, leechers)
-
-	if seeders != 1 || leechers != 0 {
-		t.Errorf("wrong values for torrent A: seeders=%d, leechers=%d, want 1,0", seeders, leechers)
-	}
-
-	// Test 2: Scrape for torrentB only
-	t.Log("\n--- Test 2: Scrape single info_hash (B) ---")
-	mock.writtenData = nil
-	copy(packet[16:36], "BBBBBBBBBBBBBBBBBBBB") // info_hash B
-	binary.BigEndian.PutUint32(packet[12:16], 10002)
-
-	tr.handleScrape(conn, addr, packet, 10002)
-
-	seeders = binary.BigEndian.Uint32(mock.writtenData[8:12])
-	leechers = binary.BigEndian.Uint32(mock.writtenData[16:20])
-	t.Logf("Torrent B: seeders=%d, leechers=%d", seeders, leechers)
-
-	if seeders != 1 || leechers != 1 {
-		t.Errorf("wrong values for torrent B: seeders=%d, leechers=%d, want 1,1", seeders, leechers)
-	}
-
-	// Test 3: Scrape for torrentC (empty)
-	t.Log("\n--- Test 3: Scrape single info_hash (C - empty) ---")
-	mock.writtenData = nil
-	copy(packet[16:36], "CCCCCCCCCCCCCCCCCCCC") // info_hash C
-	binary.BigEndian.PutUint32(packet[12:16], 10003)
-
-	tr.handleScrape(conn, addr, packet, 10003)
-
-	seeders = binary.BigEndian.Uint32(mock.writtenData[8:12])
-	leechers = binary.BigEndian.Uint32(mock.writtenData[16:20])
-	t.Logf("Torrent C: seeders=%d, leechers=%d", seeders, leechers)
-
-	if seeders != 0 || leechers != 0 {
-		t.Errorf("wrong values for torrent C: seeders=%d, leechers=%d, want 0,0", seeders, leechers)
-	}
-
-	// Test 4: Scrape for non-existent torrent
-	t.Log("\n--- Test 4: Scrape non-existent info_hash ---")
-	mock.writtenData = nil
-	copy(packet[16:36], "ZZZZZZZZZZZZZZZZZZZZ") // non-existent info_hash
-	binary.BigEndian.PutUint32(packet[12:16], 10004)
-
-	tr.handleScrape(conn, addr, packet, 10004)
-
-	seeders = binary.BigEndian.Uint32(mock.writtenData[8:12])
-	leechers = binary.BigEndian.Uint32(mock.writtenData[16:20])
-	t.Logf("Non-existent: seeders=%d, leechers=%d", seeders, leechers)
-
-	if seeders != 0 || leechers != 0 {
-		t.Errorf("wrong values for non-existent: seeders=%d, leechers=%d, want 0,0", seeders, leechers)
-	}
-
-	// Test 5: Multiple info_hashes (A, B, C)
-	t.Log("\n--- Test 5: Scrape multiple info_hashes (A, B, C) ---")
-	mock.writtenData = nil
-	packet = make([]byte, 76) // 16 header + 60 for three info_hashes
-	binary.BigEndian.PutUint64(packet[0:8], connID)
-	binary.BigEndian.PutUint32(packet[8:12], actionScrape)
-	binary.BigEndian.PutUint32(packet[12:16], 10005)
-	copy(packet[16:36], "AAAAAAAAAAAAAAAAAAAA") // info_hash A at bytes 16-35
-	copy(packet[36:56], "BBBBBBBBBBBBBBBBBBBB") // info_hash B at bytes 36-55
-	copy(packet[56:76], "CCCCCCCCCCCCCCCCCCCC") // info_hash C at bytes 56-75
-
-	tr.handleScrape(conn, addr, packet, 10005)
-
-	if len(mock.writtenData) != 44 { // 8 header + 3*12 = 44
-		t.Fatalf("expected 44 bytes for 3 hashes, got %d", len(mock.writtenData))
-	}
-
-	// First response (A): bytes 8-19
-	seedersA := binary.BigEndian.Uint32(mock.writtenData[8:12])
-	leechersA := binary.BigEndian.Uint32(mock.writtenData[16:20])
-	// Second response (B): bytes 20-31
-	seedersB := binary.BigEndian.Uint32(mock.writtenData[20:24])
-	leechersB := binary.BigEndian.Uint32(mock.writtenData[28:32])
-	// Third response (C): bytes 32-43
-	seedersC := binary.BigEndian.Uint32(mock.writtenData[32:36])
-	leechersC := binary.BigEndian.Uint32(mock.writtenData[40:44])
-
-	t.Logf("Multi-scrape results:")
-	t.Logf("  Torrent A: seeders=%d, leechers=%d", seedersA, leechersA)
-	t.Logf("  Torrent B: seeders=%d, leechers=%d", seedersB, leechersB)
-	t.Logf("  Torrent C: seeders=%d, leechers=%d", seedersC, leechersC)
-
-	if seedersA != 1 || leechersA != 0 {
-		t.Errorf("torrent A in multi-scrape: seeders=%d, leechers=%d, want 1,0", seedersA, leechersA)
-	}
-	if seedersB != 1 || leechersB != 1 {
-		t.Errorf("torrent B in multi-scrape: seeders=%d, leechers=%d, want 1,1", seedersB, leechersB)
-	}
-	if seedersC != 0 || leechersC != 0 {
-		t.Errorf("torrent C in multi-scrape: seeders=%d, leechers=%d, want 0,0", seedersC, leechersC)
-	}
-
-	// Test 6: Wrong byte offset (using byte 15 instead of 16 for info_hash)
-	t.Log("\n--- Test 6: Verify byte offset is correct (16, not 15) ---")
-	mock.writtenData = nil
-	packet = make([]byte, 36)
-	binary.BigEndian.PutUint64(packet[0:8], connID)
-	binary.BigEndian.PutUint32(packet[8:12], actionScrape)
-	binary.BigEndian.PutUint32(packet[12:16], 10006)
-	// Put info_hash A starting at byte 15 (WRONG) - should NOT find torrent
-	packet[15] = 'A'
-	copy(packet[16:35], "AAAAAAAAAAAAAAAAAAA")
-
-	tr.handleScrape(conn, addr, packet, 10006)
-
-	seeders = binary.BigEndian.Uint32(mock.writtenData[8:12])
-	t.Logf("With byte-15 offset: seeders=%d (should be 0 if reading from byte 16)", seeders)
-
-	if seeders != 0 {
-		t.Log("WARNING: Looks like it might be reading from wrong offset!")
-	} else {
-		t.Log("Good: Using correct byte 16 offset")
-	}
-
-	t.Log("\n=== info_hash handling tests completed ===")
-}
-
-// TestHandleScrape_HexStringVsRawBytes tests the exact issue where info_hash
-// appears shifted by one byte (e.g., "0c70..." instead of "c701...")
-func TestHandleScrape_HexStringVsRawBytes(t *testing.T) {
-	tr := setupTracker(t)
-	mock := &mockPacketConn{}
-	conn := mock
-	addr := &net.UDPAddr{IP: net.ParseIP("192.168.1.1"), Port: 6881}
-	connID := generateConnectionID(addr)
-
-	// The info_hash the user wants to track
-	infoHashHex := "c70157ea0129a963b027c57231bf7ced419db0d7"
-	t.Logf("Expected info_hash (hex string): %s", infoHashHex)
-
-	// Create torrent with properly decoded info_hash
-	infoHashBytes, err := hex.DecodeString(infoHashHex)
-	if err != nil {
-		t.Fatalf("failed to decode hex: %v", err)
-	}
-	if len(infoHashBytes) != 20 {
-		t.Fatalf("decoded info_hash should be 20 bytes, got %d", len(infoHashBytes))
-	}
-
-	infoHash := NewHashID(infoHashBytes)
-	t.Logf("Expected info_hash (raw bytes): %x", infoHashBytes)
-	t.Logf("Expected info_hash (String()):  %s", infoHash.String())
-
-	// Add a peer to this torrent
-	torrent := tr.getOrCreateTorrent(infoHash)
-	torrent.addPeer(NewHashID([]byte("peer1_______________")), net.ParseIP("192.168.1.10"), 6881, 0)
-
-	// Test 1: Send raw bytes (correct way per BEP 15)
-	t.Log("\n--- Test 1: Send info_hash as raw bytes (correct) ---")
-	mock.writtenData = nil
-	packet := make([]byte, 36)
-	binary.BigEndian.PutUint64(packet[0:8], connID)
-	binary.BigEndian.PutUint32(packet[8:12], actionScrape)
-	binary.BigEndian.PutUint32(packet[12:16], 10001)
-	copy(packet[16:36], infoHashBytes) // Copy raw bytes
-
-	tr.handleScrape(conn, addr, packet, 10001)
-
-	seeders := binary.BigEndian.Uint32(mock.writtenData[8:12])
-	extractedHash := hex.EncodeToString(packet[16:36])
-	t.Logf("Sent bytes 16-35:     %s", extractedHash)
-	t.Logf("Found torrent:        %v", seeders == 1)
-
-	if seeders != 1 {
-		t.Errorf("Expected to find torrent with raw bytes, got seeders=%d", seeders)
-	}
-
-	// Test 2: Send as hex string (incorrect - causes the shift issue)
-	t.Log("\n--- Test 2: Send info_hash as hex string (WRONG - reproduces the bug) ---")
-	mock.writtenData = nil
-	packet = make([]byte, 56) // Need more space for 40 char hex string
-	binary.BigEndian.PutUint64(packet[0:8], connID)
-	binary.BigEndian.PutUint32(packet[8:12], actionScrape)
-	binary.BigEndian.PutUint32(packet[12:16], 10002)
-	copy(packet[16:56], infoHashHex) // Copy hex string (40 bytes)
-
-	tr.handleScrape(conn, addr, packet, 10002)
-
-	seeders = binary.BigEndian.Uint32(mock.writtenData[8:12])
-	extractedHash = string(packet[16:56])
-	t.Logf("Sent hex string:      %s", extractedHash)
-	t.Logf("Read by handler:      %s", hex.EncodeToString(packet[16:36]))
-	t.Logf("Found torrent:        %v", seeders == 1)
-
-	if seeders == 1 {
-		t.Log("WARNING: Should NOT find torrent when sending hex string!")
-	} else {
-		t.Log("Correctly did NOT find torrent (hex string doesn't match raw bytes)")
-	}
-
-	// Test 3: Send with off-by-one error (0 padding at byte 16)
-	t.Log("\n--- Test 3: Send with off-by-one offset (reproduces user's exact issue) ---")
-	mock.writtenData = nil
-	packet = make([]byte, 57) // Extra byte for padding
-	binary.BigEndian.PutUint64(packet[0:8], connID)
-	binary.BigEndian.PutUint32(packet[8:12], actionScrape)
-	binary.BigEndian.PutUint32(packet[12:16], 10003)
-	packet[16] = 0                   // Extra byte at position 16
-	copy(packet[17:57], infoHashHex) // Hex string starts at byte 17
-
-	tr.handleScrape(conn, addr, packet, 10003)
-
-	seeders = binary.BigEndian.Uint32(mock.writtenData[8:12])
-	extractedHash = hex.EncodeToString(packet[16:36])
-	t.Logf("Received info_hash:   %s", extractedHash)
-	t.Logf("Expected:             %s", infoHashHex)
-	t.Logf("Found torrent:        %v (should be false)", seeders == 1)
-
-	// This is what the user is seeing - shifted by one with 0 prepended
-	if extractedHash == "0"+infoHashHex[:39] {
-		t.Logf("REPRODUCED THE BUG! Info hash shifted by one byte")
-		t.Logf("You sent:    %s", infoHashHex)
-		t.Logf("Tracker sees: %s", extractedHash)
-	}
-
-	// Test 4: Verify the correct packet format
-	t.Log("\n--- Test 4: Correct packet structure (BEP 15) ---")
-	t.Logf("Bytes 0-7:   connection_id (8 bytes)")
-	t.Logf("Bytes 8-11:  action (4 bytes) - 2 for scrape")
-	t.Logf("Bytes 12-15: transaction_id (4 bytes)")
-	t.Logf("Bytes 16-35: info_hash (20 bytes, NOT hex string!)")
-	t.Logf("Total:       36 bytes minimum for single info_hash")
-}
-
-// TestHandleScrape_CompletedFieldPosition verifies that the completed field
-// is in the correct byte position for qBittorrent to parse it properly.
-// BEP 15 format: seeders(4) + completed(4) + leechers(4) per info_hash
-func TestHandleScrape_CompletedFieldPosition(t *testing.T) {
-	tr := setupTracker(t)
-	mock := &mockPacketConn{}
-	conn := mock
-	addr := &net.UDPAddr{IP: net.ParseIP("192.168.1.1"), Port: 6881}
-	connID := generateConnectionID(addr)
 	infoHash := NewHashID([]byte("torrent12345678901"))
-
-	// Set up torrent with known values
+	peerID := NewHashID([]byte("peer1_______________"))
 	torrent := tr.getOrCreateTorrent(infoHash)
-	torrent.addPeer(NewHashID([]byte("seeder1____________")), net.ParseIP("192.168.1.10"), 6881, 0)
-	torrent.addPeer(NewHashID([]byte("seeder2____________")), net.ParseIP("192.168.1.11"), 6881, 0)
-	torrent.addPeer(NewHashID([]byte("leecher1___________")), net.ParseIP("192.168.1.12"), 6881, 1000)
+
+	// Regular update (no event or eventNone)
+	updateTorrentPeer(torrent, peerID, net.ParseIP("192.168.1.1"), 6881, eventNone, 1000)
+
+	if torrent.leechers != 1 {
+		t.Errorf("leechers = %d, want 1", torrent.leechers)
+	}
+}
+
+func TestBuildAnnounceResponse_IPv4(t *testing.T) {
+	// Create sample peers data (1 peer = 6 bytes)
+	peers := make([]byte, 6)
+	peers[0], peers[1], peers[2], peers[3] = 192, 168, 1, 100 // IP
+	binary.BigEndian.PutUint16(peers[4:6], 6889)              // port
+
+	response := buildAnnounceResponse(peers, 5, 10, 12345, true)
+
+	// Check response size: header (20) + 1 peer (6) = 26
+	if len(response) != 26 {
+		t.Fatalf("response length = %d, want 26", len(response))
+	}
+
+	// Verify header fields
+	action := binary.BigEndian.Uint32(response[0:4])
+	if action != actionAnnounce {
+		t.Errorf("action = %d, want %d", action, actionAnnounce)
+	}
+
+	txID := binary.BigEndian.Uint32(response[4:8])
+	if txID != 12345 {
+		t.Errorf("transaction_id = %d, want 12345", txID)
+	}
+
+	leechers := binary.BigEndian.Uint32(response[12:16])
+	if leechers != 10 {
+		t.Errorf("leechers = %d, want 10", leechers)
+	}
+
+	seeders := binary.BigEndian.Uint32(response[16:20])
+	if seeders != 5 {
+		t.Errorf("seeders = %d, want 5", seeders)
+	}
+
+	// Verify peer data
+	peerIP := net.IP(response[20:24])
+	peerPort := binary.BigEndian.Uint16(response[24:26])
+	if peerIP.String() != "192.168.1.100" {
+		t.Errorf("peer IP = %s, want 192.168.1.100", peerIP)
+	}
+	if peerPort != 6889 {
+		t.Errorf("peer port = %d, want 6889", peerPort)
+	}
+}
+
+func TestBuildAnnounceResponse_IPv6(t *testing.T) {
+	// Create sample IPv6 peers data (1 peer = 18 bytes)
+	peers := make([]byte, 18)
+	copy(peers[0:16], net.ParseIP("2001:db8::1"))  // IPv6 address
+	binary.BigEndian.PutUint16(peers[16:18], 6889) // port
+
+	response := buildAnnounceResponse(peers, 3, 7, 54321, false)
+
+	// Check response size: header (20) + 1 peer (18) = 38
+	if len(response) != 38 {
+		t.Fatalf("response length = %d, want 38", len(response))
+	}
+
+	// Verify header
+	action := binary.BigEndian.Uint32(response[0:4])
+	if action != actionAnnounce {
+		t.Errorf("action = %d, want %d", action, actionAnnounce)
+	}
+
+	txID := binary.BigEndian.Uint32(response[4:8])
+	if txID != 54321 {
+		t.Errorf("transaction_id = %d, want 54321", txID)
+	}
+}
+
+func TestBuildAnnounceResponse_EmptyPeers(t *testing.T) {
+	// Test with no peers
+	response := buildAnnounceResponse([]byte{}, 0, 0, 99999, true)
+
+	// Should be just the header (20 bytes)
+	if len(response) != 20 {
+		t.Fatalf("response length = %d, want 20", len(response))
+	}
+
+	action := binary.BigEndian.Uint32(response[0:4])
+	if action != actionAnnounce {
+		t.Errorf("action = %d, want %d", action, actionAnnounce)
+	}
+}
+
+func TestGetScrapeStats_EmptyTorrent(t *testing.T) {
+	tr := setupTracker(t)
+	infoHash := NewHashID([]byte("nonexistent_________"))
+
+	stats := tr.getScrapeStats(infoHash)
+
+	if stats.seeders != 0 || stats.completed != 0 || stats.leechers != 0 {
+		t.Errorf("empty torrent stats: seeders=%d, completed=%d, leechers=%d, want all 0",
+			stats.seeders, stats.completed, stats.leechers)
+	}
+}
+
+func TestGetScrapeStats_WithPeers(t *testing.T) {
+	tr := setupTracker(t)
+	infoHash := NewHashID([]byte("torrent12345678901"))
+	torrent := tr.getOrCreateTorrent(infoHash)
+
+	// Add seeders and leechers
+	torrent.addPeer(NewHashID([]byte("seeder1____________")), net.ParseIP("192.168.1.1"), 6881, 0)
+	torrent.addPeer(NewHashID([]byte("seeder2____________")), net.ParseIP("192.168.1.2"), 6882, 0)
+	torrent.addPeer(NewHashID([]byte("leecher1___________")), net.ParseIP("192.168.1.3"), 6883, 1000)
+
+	// Set completed manually to test that field
 	torrent.mu.Lock()
-	torrent.completed = 42 // Set a specific value we can verify
+	torrent.completed = 42
 	torrent.mu.Unlock()
 
-	t.Log("=== Testing scrape response byte positions ===")
+	stats := tr.getScrapeStats(infoHash)
 
+	if stats.seeders != 2 {
+		t.Errorf("seeders = %d, want 2", stats.seeders)
+	}
+	if stats.completed != 42 {
+		t.Errorf("completed = %d, want 42", stats.completed)
+	}
+	if stats.leechers != 1 {
+		t.Errorf("leechers = %d, want 1", stats.leechers)
+	}
+}
+
+func TestBuildScrapeResponse_SingleHash(t *testing.T) {
+	tr := setupTracker(t)
+	infoHash := NewHashID([]byte("torrent12345678901"))
+	torrent := tr.getOrCreateTorrent(infoHash)
+	torrent.addPeer(NewHashID([]byte("seeder1____________")), net.ParseIP("192.168.1.1"), 6881, 0)
+
+	// Create scrape packet with one info_hash
 	packet := make([]byte, 36)
-	binary.BigEndian.PutUint64(packet[0:8], connID)
+	binary.BigEndian.PutUint64(packet[0:8], 12345)
 	binary.BigEndian.PutUint32(packet[8:12], actionScrape)
-	binary.BigEndian.PutUint32(packet[12:16], 12345)
+	binary.BigEndian.PutUint32(packet[12:16], 999)
 	copy(packet[16:36], "torrent12345678901")
 
-	tr.handleScrape(conn, addr, packet, 12345)
+	response, numHashes := tr.buildScrapeResponse(packet, 999)
 
-	if len(mock.writtenData) != 20 {
-		t.Fatalf("expected 20 byte response, got %d", len(mock.writtenData))
+	if numHashes != 1 {
+		t.Errorf("numHashes = %d, want 1", numHashes)
 	}
 
-	// Verify each field position according to BEP 15
-	// Response format: action(4) + transaction_id(4) + seeders(4) + completed(4) + leechers(4)
-	action := binary.BigEndian.Uint32(mock.writtenData[0:4])
-	txID := binary.BigEndian.Uint32(mock.writtenData[4:8])
-	seeders := binary.BigEndian.Uint32(mock.writtenData[8:12])
-	completed := binary.BigEndian.Uint32(mock.writtenData[12:16])
-	leechers := binary.BigEndian.Uint32(mock.writtenData[16:20])
+	// Response should be: header (8) + 1 entry (12) = 20 bytes
+	if len(response) != 20 {
+		t.Fatalf("response length = %d, want 20", len(response))
+	}
 
-	t.Logf("Response bytes (hex): %x", mock.writtenData)
-	t.Logf("Byte breakdown:")
-	t.Logf("  Bytes 0-3:   action=%d (expected %d)", action, actionScrape)
-	t.Logf("  Bytes 4-7:   transaction_id=%d (expected 12345)", txID)
-	t.Logf("  Bytes 8-11:  seeders=%d (expected 2)", seeders)
-	t.Logf("  Bytes 12-15: completed=%d (expected 42)", completed)
-	t.Logf("  Bytes 16-19: leechers=%d (expected 1)", leechers)
-
-	// Verify all values are in correct positions
+	// Verify header
+	action := binary.BigEndian.Uint32(response[0:4])
 	if action != actionScrape {
-		t.Errorf("wrong action at bytes 0-3: got %d, want %d", action, actionScrape)
-	}
-	if txID != 12345 {
-		t.Errorf("wrong transaction_id at bytes 4-7: got %d, want 12345", txID)
-	}
-	if seeders != 2 {
-		t.Errorf("wrong seeders at bytes 8-11: got %d, want 2", seeders)
-	}
-	if completed != 42 {
-		t.Errorf("wrong completed at bytes 12-15: got %d, want 42", completed)
-	}
-	if leechers != 1 {
-		t.Errorf("wrong leechers at bytes 16-19: got %d, want 1", leechers)
+		t.Errorf("action = %d, want %d", action, actionScrape)
 	}
 
-	// Verify byte-by-byte what qBittorrent would see
-	t.Log("\n=== What qBittorrent parses ===")
-	t.Logf("If qBittorrent reads seeders from bytes 8-11:   %d (big-endian)", seeders)
-	t.Logf("If qBittorrent reads completed from bytes 12-15: %d (big-endian)", completed)
-	t.Logf("If qBittorrent reads leechers from bytes 16-19: %d (big-endian)", leechers)
-
-	// Check if fields might be interpreted as little-endian (wrong)
-	seedersLE := binary.LittleEndian.Uint32(mock.writtenData[8:12])
-	completedLE := binary.LittleEndian.Uint32(mock.writtenData[12:16])
-	leechersLE := binary.LittleEndian.Uint32(mock.writtenData[16:20])
-	t.Logf("\nIf WRONGLY read as little-endian:")
-	t.Logf("  seeders would be:   %d", seedersLE)
-	t.Logf("  completed would be: %d", completedLE)
-	t.Logf("  leechers would be:  %d", leechersLE)
-
-	if seedersLE == 33554432 { // 2 in big-endian = 0x00000002, in little-endian positions
-		t.Log("WARNING: Values would be wrong if read as little-endian!")
+	txID := binary.BigEndian.Uint32(response[4:8])
+	if txID != 999 {
+		t.Errorf("transaction_id = %d, want 999", txID)
 	}
 
-	// Verify raw bytes are in correct order
-	t.Log("\n=== Raw byte verification ===")
-	t.Logf("Completed bytes (12-15): % x", mock.writtenData[12:16])
-	t.Logf("Expected for value 42:   00 00 00 2a")
-	if mock.writtenData[12] != 0 || mock.writtenData[13] != 0 ||
-		mock.writtenData[14] != 0 || mock.writtenData[15] != 42 {
-		t.Errorf("completed bytes are wrong: expected 00 00 00 2a, got % x",
-			mock.writtenData[12:16])
+	// Verify stats
+	seeders := binary.BigEndian.Uint32(response[8:12])
+	completed := binary.BigEndian.Uint32(response[12:16])
+	leechers := binary.BigEndian.Uint32(response[16:20])
+
+	if seeders != 1 {
+		t.Errorf("seeders = %d, want 1", seeders)
+	}
+	if leechers != 0 {
+		t.Errorf("leechers = %d, want 0", leechers)
+	}
+	if completed != 1 {
+		t.Errorf("completed = %d, want 1", completed)
+	}
+}
+
+func TestBuildScrapeResponse_MultipleHashes(t *testing.T) {
+	tr := setupTracker(t)
+
+	// Create two torrents
+	infoHash1 := NewHashID([]byte("torrent1___________"))
+	infoHash2 := NewHashID([]byte("torrent2___________"))
+
+	torrent1 := tr.getOrCreateTorrent(infoHash1)
+	torrent1.addPeer(NewHashID([]byte("peer1______________")), net.ParseIP("192.168.1.1"), 6881, 0)
+
+	torrent2 := tr.getOrCreateTorrent(infoHash2)
+	torrent2.addPeer(NewHashID([]byte("peer2______________")), net.ParseIP("192.168.1.2"), 6882, 1000)
+
+	// Create scrape packet with two info_hashes
+	packet := make([]byte, 56) // 16 header + 40 bytes for 2 hashes
+	binary.BigEndian.PutUint64(packet[0:8], 12345)
+	binary.BigEndian.PutUint32(packet[8:12], actionScrape)
+	binary.BigEndian.PutUint32(packet[12:16], 888)
+	copy(packet[16:36], "torrent1___________")
+	copy(packet[36:56], "torrent2___________")
+
+	response, numHashes := tr.buildScrapeResponse(packet, 888)
+
+	if numHashes != 2 {
+		t.Errorf("numHashes = %d, want 2", numHashes)
+	}
+
+	// Response should be: header (8) + 2 entries (24) = 32 bytes
+	if len(response) != 32 {
+		t.Fatalf("response length = %d, want 32", len(response))
+	}
+
+	// First torrent stats (bytes 8-19)
+	seeders1 := binary.BigEndian.Uint32(response[8:12])
+	leechers1 := binary.BigEndian.Uint32(response[16:20])
+	if seeders1 != 1 || leechers1 != 0 {
+		t.Errorf("torrent1: seeders=%d, leechers=%d, want 1,0", seeders1, leechers1)
+	}
+
+	// Second torrent stats (bytes 20-31)
+	seeders2 := binary.BigEndian.Uint32(response[20:24])
+	leechers2 := binary.BigEndian.Uint32(response[28:32])
+	if seeders2 != 0 || leechers2 != 1 {
+		t.Errorf("torrent2: seeders=%d, leechers=%d, want 0,1", seeders2, leechers2)
+	}
+}
+
+func TestBuildScrapeResponse_NonExistentTorrent(t *testing.T) {
+	tr := setupTracker(t)
+
+	// Create scrape packet for non-existent torrent
+	packet := make([]byte, 36)
+	binary.BigEndian.PutUint64(packet[0:8], 12345)
+	binary.BigEndian.PutUint32(packet[8:12], actionScrape)
+	binary.BigEndian.PutUint32(packet[12:16], 777)
+	copy(packet[16:36], "nonexistent_________")
+
+	response, numHashes := tr.buildScrapeResponse(packet, 777)
+
+	if numHashes != 1 {
+		t.Errorf("numHashes = %d, want 1", numHashes)
+	}
+
+	// All stats should be 0 for non-existent torrent
+	seeders := binary.BigEndian.Uint32(response[8:12])
+	completed := binary.BigEndian.Uint32(response[12:16])
+	leechers := binary.BigEndian.Uint32(response[16:20])
+
+	if seeders != 0 || completed != 0 || leechers != 0 {
+		t.Errorf("non-existent torrent: seeders=%d, completed=%d, leechers=%d, want all 0",
+			seeders, completed, leechers)
 	}
 }
