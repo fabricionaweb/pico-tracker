@@ -11,14 +11,25 @@ This directory contains a standalone benchmark tool for testing pico-tracker per
 
 ## Quick Start
 
+### Testing Against Remote Server (Recommended)
+
+For most accurate results, test against a remote Linux server running pico-tracker:
+
+```bash
+# Run benchmark against remote tracker
+go run ./benchmark -target 198.50.106.243:1337
+```
+
+### Testing Locally (Development Only)
+
+If you need to test locally during development:
+
 ```bash
 # Terminal 1: Build and start the tracker
 go run ./
 
 # Terminal 2: Run benchmark
 go run ./benchmark
-
-# The benchmark runs for 30 seconds with 100 concurrent workers by default
 ```
 
 > **Platform Note - macOS Users:** Benchmarking against **localhost on macOS is fundamentally broken** for high-throughput UDP testing. When multiple workers send packets simultaneously, the macOS UDP stack drops packets regardless of buffer size (even with 8MB+ buffers). This is a macOS kernel limitation, not a tracker issue.
@@ -62,20 +73,20 @@ Flags:
 ### Example Commands
 
 ```bash
-# Quick smoke test (10 seconds, 50 workers)
-go run benchmark/main.go -duration 10s -concurrency 50
+# Quick smoke test against remote tracker
+go run benchmark/main.go -target tracker.example.com:1337 -duration 10s -concurrency 50
 
 # Extended load test (5 minutes, 1000 workers)
-go run benchmark/main.go -duration 5m -concurrency 1000
+go run benchmark/main.go -target tracker.example.com:1337 -duration 5m -concurrency 1000
 
 # Rate-limited test (100 requests/second per worker)
-go run benchmark/main.go -rate 100
+go run benchmark/main.go -target tracker.example.com:1337 -rate 100
 
 # Heavy load with many torrents (500 workers, 20 hashes each)
-go run benchmark/main.go -concurrency 500 -hashes 20
+go run benchmark/main.go -target tracker.example.com:1337 -concurrency 500 -hashes 20
 
-# Test remote tracker
-go run benchmark/main.go -target tracker.example.com:1337 -duration 60s
+# Local testing (development only)
+go run benchmark/main.go -target 127.0.0.1:1337 -duration 30s -concurrency 100
 ```
 
 ## Understanding the Results
@@ -376,38 +387,48 @@ b.Stats.ResponseSizes = append(b.Stats.ResponseSizes, n)
 
 ## Prompt for AGENTS
 
-When running benchmarks:
+When running benchmarks, determine the testing mode first:
 
-1. **Always run benchmarks sequentially** - NOT in parallel to avoid resource contention
-2. **Use the tracker binary** - Build with `go build -o pico-tracker .` and run `./pico-tracker &`
-3. **Stop tracker when done** - Kill the process after benchmarks complete
-4. **Document everything** - Include all commands, parameters, and system info
-5. **Compare with previous results** - Use the most recent results file as baseline
+### Remote Server Testing (Recommended)
+
+When testing against a remote tracker instance:
+
+1. **Run benchmarks sequentially** - NOT in parallel to avoid resource contention
+2. **DO NOT start a local tracker** - The remote server already has the tracker running
+3. **Document everything** - Include all commands, parameters, and system info
+4. **Compare with previous results** - Use the most recent results file as baseline
 
 ### Standard Benchmark Command Template
 
 ```bash
 # Light Load (10 workers)
-go run benchmark/main.go -target 127.0.0.1:1337 -duration 30s -concurrency 10 > /tmp/light_load.txt 2>&1
+go run benchmark/main.go -target <IP:PORT> -duration 30s -concurrency 10 > /tmp/light_load.txt 2>&1
 
 # Medium Load (100 workers)  
-go run benchmark/main.go -target 127.0.0.1:1337 -duration 30s -concurrency 100 > /tmp/medium_load.txt 2>&1
+go run benchmark/main.go -target <IP:PORT> -duration 30s -concurrency 100 > /tmp/medium_load.txt 2>&1
 
 # Heavy Load (1000 workers)
-go run benchmark/main.go -target 127.0.0.1:1337 -duration 30s -concurrency 1000 > /tmp/heavy_load.txt 2>&1
+go run benchmark/main.go -target <IP:PORT> -duration 30s -concurrency 1000 > /tmp/heavy_load.txt 2>&1
 ```
 
 ### Running Against Remote Linux Instances
 
-When benchmarking against remote Linux servers (not localhost):
+When benchmarking against remote Linux servers:
 
-1. **Ask for the instance details** - Request the IP:port of the remote tracker instance
-2. **Replace target** - Update the `-target` flag with the provided IP:port
-3. **Ensure connectivity** - Verify network connectivity before running benchmarks
-4. **Document the environment** - Note that tests were run against remote instance
+1. **Use the provided IP:port** - The user will supply the remote tracker instance details
+2. **Ensure connectivity** - Verify network connectivity before running benchmarks
+3. **Document the environment** - Note that tests were run against remote instance
 
 Example command for remote instance:
 ```bash
 # Replace <IP:PORT> with the instance provided by the user
 go run benchmark/main.go -target <IP:PORT> -duration 30s -concurrency 100
 ```
+
+### Local Testing (Development Only)
+
+When testing locally (e.g., for development or debugging):
+
+1. **Build and start the tracker** - Build with `go build -o pico-tracker .` and run `./pico-tracker &`
+2. **Run benchmarks** - Execute benchmark commands against `127.0.0.1:1337`
+3. **Stop tracker when done** - Kill the process after benchmarks complete
