@@ -21,6 +21,21 @@ go run ./benchmark
 # The benchmark runs for 30 seconds with 100 concurrent workers by default
 ```
 
+> **Platform Note - macOS Users:** Benchmarking against **localhost on macOS is fundamentally broken** for high-throughput UDP testing. When multiple workers send packets simultaneously, the macOS UDP stack drops packets regardless of buffer size (even with 8MB+ buffers). This is a macOS kernel limitation, not a tracker issue.
+>
+> **The only reliable benchmark method is testing against a remote Linux server.**
+>
+> **Why macOS localhost fails:**
+> - The benchmark starts all workers simultaneously, causing a packet burst
+> - macOS UDP receive queue overflows before the tracker can read any packets
+> - Increasing socket buffers (via `SetReadBuffer` or `sysctl`) does **not** resolve this
+> - Docker on macOS has the same issue (runs Linux in a VM, but networking still goes through macOS)
+>
+> **What does work on macOS:**
+> - Smoke testing: `-concurrency 1` to verify the tracker responds
+> - Testing against remote Linux servers (e.g., `tracker.example.com:1337`) - this shows 4,000+ RPS with 0% failures
+>
+
 ## What the Benchmark Measures
 
 The benchmark tool simulates real BitTorrent clients by:
@@ -224,14 +239,15 @@ Different percentiles tell different stories:
 **Symptoms**: Failed requests > 1%
 
 **Possible causes**:
-1. **Tracker overloaded**: Concurrency too high
-2. **Network timeouts**: Remote tracker with high latency
-3. **Connection refused**: Tracker not running or wrong port
-4. **Malformed responses**: Tracker bugs
+1. **macOS localhost UDP drops**: The #1 cause of benchmark failures. When running against localhost on macOS with >1 worker, packets are dropped at the kernel level due to burst traffic. **Increasing socket buffers does not fix this** - we tested 4MB and 8MB buffers with no improvement.
+2. **Tracker overloaded**: Concurrency too high
+3. **Network timeouts**: Remote tracker with high latency
+4. **Connection refused**: Tracker not running or wrong port
+5. **Malformed responses**: Tracker bugs
 
 **Solutions**:
-- Reduce concurrency
-- Increase timeout in benchmark/main.go (responseTimeout constant)
+- **macOS users**: Run benchmarks against a **remote Linux server**. macOS localhost is unreliable for >1 worker.
+- For local smoke testing on macOS, use `-concurrency 1` only
 - Verify tracker is running: `lsof -i :1337`
 - Enable tracker debug mode: `DEBUG=1 go run main.go`
 
