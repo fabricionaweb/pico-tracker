@@ -273,7 +273,7 @@ func (tr *Tracker) cleanupStalePeers() {
 	tr.rateLimiterMu.Lock()
 	rateLimitStaleDeadline := time.Now().Add(-rateLimitCleanupThreshold)
 	for key, rl := range tr.rateLimiter {
-		if rl.windowStart.Before(rateLimitStaleDeadline) {
+		if !rl.windowStart.After(rateLimitStaleDeadline) {
 			delete(tr.rateLimiter, key)
 		}
 	}
