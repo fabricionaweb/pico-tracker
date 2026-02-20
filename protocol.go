@@ -42,6 +42,9 @@ const (
 
 	// Pre-computed interval in seconds for announce responses (avoids runtime conversion)
 	announceIntervalSeconds = uint32(announceInterval / time.Second) // 600 seconds
+
+	// Pre-computed connection expiration in seconds for zero-allocation validation
+	connectionExpirationSeconds = uint32(connectionExpiration / time.Second) // 120 seconds
 )
 
 // hmacPool pools HMAC hashers to eliminate allocations in hot path
@@ -133,7 +136,10 @@ func validateConnectionID(id uint64, addr *net.UDPAddr, secret []byte) bool {
 	//nolint:gosec // Intentionally extracting lower 32 bits for protocol
 	timestamp := uint32(id >> 32)
 
-	if time.Since(time.Unix(int64(timestamp), 0)) > connectionExpiration {
+	// Zero-allocation expiration check: compare uint32 timestamps directly
+	// instead of converting to time.Time and calling time.Since()
+	now := uint32(time.Now().Unix())
+	if now > timestamp && now-timestamp > connectionExpirationSeconds {
 		return false
 	}
 

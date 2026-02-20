@@ -13,6 +13,9 @@ const (
 	errorHeaderSize   = 8                                   // action:4 + transaction_id:4
 	errorMaxStackSize = 128                                 // maximum stack buffer size for error responses
 	errorMaxMsgLen    = errorMaxStackSize - errorHeaderSize // 120 bytes for message
+
+	// Pre-computed rate limit cleanup threshold for zero-runtime-overhead cleanup
+	rateLimitCleanupThreshold = rateLimitWindow * 2 // 2 windows are definitely stale
 )
 
 // Tracker methods
@@ -252,19 +255,23 @@ func (tr *Tracker) cleanupStalePeers() {
 					t.leechers--
 				}
 				delete(t.peers, id)
-				debug("cleanup: removed stale peer %s @ %s:%d", id.String(), p.IP, p.Port)
+				if debugEnabled.Load() {
+					debug("cleanup: removed stale peer %s @ %s:%d", id.String(), p.IP, p.Port)
+				}
 			}
 		}
 		if len(t.peers) == 0 {
 			delete(tr.torrents, hash)
-			debug("cleanup: removed inactive torrent %s", hash.String())
+			if debugEnabled.Load() {
+				debug("cleanup: removed inactive torrent %s", hash.String())
+			}
 		}
 		t.mu.Unlock()
 	}
 	tr.mu.Unlock()
 
 	tr.rateLimiterMu.Lock()
-	rateLimitStaleDeadline := time.Now().Add(-rateLimitWindow * 2) // 2 windows are definitely stale
+	rateLimitStaleDeadline := time.Now().Add(-rateLimitCleanupThreshold)
 	for key, rl := range tr.rateLimiter {
 		if rl.windowStart.Before(rateLimitStaleDeadline) {
 			delete(tr.rateLimiter, key)
