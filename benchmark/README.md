@@ -375,6 +375,16 @@ b.Stats.ResponseSizes = append(b.Stats.ResponseSizes, n)
 
 When running benchmarks, determine the testing mode first:
 
+### CRITICAL: ALWAYS Create Results File
+
+**You MUST ALWAYS create a new `results-YYYYMMDD.md` file after running benchmarks.** This is not optional - it is required for tracking performance over time.
+
+1. **Find the most recent results file** - List existing `results-*.md` files and identify the latest one
+2. **Copy the template** - Use `RESULTS_TEMPLATE.md` or the most recent results file as a starting point
+3. **Fill in current results** - Include all three benchmark runs (10, 100, 1000 workers)
+4. **Compare with previous** - Create a comparison table showing metrics from the previous run vs current run
+5. **Save with today's date** - Name the file `results-YYYYMMDD.md` (e.g., `results-20260220.md`)
+
 ### Remote Server Testing (Recommended)
 
 When testing against a remote tracker instance:
@@ -383,6 +393,7 @@ When testing against a remote tracker instance:
 2. **DO NOT start a local tracker** - The remote server already has the tracker running
 3. **Document everything** - Include all commands, parameters, and system info
 4. **Compare with previous results** - Use the most recent results file as baseline
+5. **Create results file** - MUST create `results-YYYYMMDD.md` with comparison table
 
 ### Standard Benchmark Command Template
 
@@ -404,6 +415,7 @@ When benchmarking against remote Linux servers:
 1. **Use the provided IP:port** - The user will supply the remote tracker instance details
 2. **Ensure connectivity** - Verify network connectivity before running benchmarks
 3. **Document the environment** - Note that tests were run against remote instance
+4. **Create results file** - MUST create `results-YYYYMMDD.md` with comparison table
 
 Example command for remote instance:
 ```bash
@@ -418,3 +430,35 @@ When testing locally (e.g., for development or debugging):
 1. **Build and start the tracker** - Build with `go build -o pico-tracker .` and run `./pico-tracker &`
 2. **Run benchmarks** - Execute benchmark commands against `127.0.0.1:1337`
 3. **Stop tracker when done** - Kill the process after benchmarks complete
+4. **Create results file** - MUST create `results-YYYYMMDD.md` with comparison table
+
+## Results File Requirements
+
+### Required Comparison Table Format
+
+Every results file MUST include a comparison table like this:
+
+```markdown
+### Comparison with Previous Run (YYYY-MM-DD)
+
+| Metric | Previous (100 workers) | Current (100 workers) | Change |
+|--------|------------------------|------------------------|--------|
+| Total Requests | 1,575,811 | 1,527,717 | -3.1% |
+| RPS | 52,524 | 50,921 | -3.0% |
+| Avg Announce Latency | 1.91ms | 1.97ms | +3.1% |
+| P95 Announce Latency | 2.23ms | 2.97ms | +33.2% |
+| Max Announce Latency | 10.19ms | 103.26ms | +913% |
+| Error Rate | 0.00% | 0.00% | No change |
+
+**Analysis:**
+- Summarize key changes (RPS, latency trends)
+- Note any anomalies or concerns
+- State overall performance status
+```
+
+**Steps to create comparison:**
+1. Read the most recent `results-*.md` file
+2. Extract metrics from the "Medium Load (100 workers)" section
+3. Calculate percentage changes: `((current - previous) / previous) * 100`
+4. Write analysis comparing the two runs
+5. Include this in the new results file
