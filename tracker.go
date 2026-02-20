@@ -76,14 +76,17 @@ func MakeRateLimitKey(addr *net.UDPAddr) string {
 
 func (tr *Tracker) getOrCreateTorrent(hash HashID) *Torrent {
 	tr.mu.Lock()
-	defer tr.mu.Unlock()
 
-	if _, ok := tr.torrents[hash]; !ok {
-		tr.torrents[hash] = &Torrent{peers: make(map[HashID]*Peer)}
-		info("created new torrent %s", hash.String())
+	if t, ok := tr.torrents[hash]; ok {
+		tr.mu.Unlock()
+		return t
 	}
 
-	return tr.torrents[hash]
+	tr.torrents[hash] = &Torrent{peers: make(map[HashID]*Peer)}
+	t := tr.torrents[hash]
+	tr.mu.Unlock()
+	info("created new torrent %s", hash.String())
+	return t
 }
 
 func (tr *Tracker) getTorrent(hash HashID) *Torrent {
@@ -95,24 +98,28 @@ func (tr *Tracker) getTorrent(hash HashID) *Torrent {
 
 func (t *Torrent) addPeer(id HashID, ip net.IP, port uint16, left uint64) {
 	t.mu.Lock()
-	defer t.mu.Unlock()
 
 	if p, exists := t.peers[id]; exists {
 		if p.Left == 0 && left > 0 {
 			t.seeders--
 			t.leechers++
-			debug("peer %s became leecher @ %s:%d", id.String(), ip, port)
+			if debugEnabled.Load() {
+				debug("peer %s became leecher @ %s:%d", id.String(), ip, port)
+			}
 		} else if p.Left > 0 && left == 0 {
 			t.leechers--
 			t.seeders++
 			if !p.Completed {
 				p.Completed = true
 				t.completed++
-				debug("peer %s completed torrent @ %s:%d", id.String(), ip, port)
+				if debugEnabled.Load() {
+					debug("peer %s completed torrent @ %s:%d", id.String(), ip, port)
+				}
 			}
 		}
 		p.IP, p.Port, p.Left = ip, port, left
 		p.LastAnnounced = time.Now()
+		t.mu.Unlock()
 		return
 	}
 
@@ -121,20 +128,25 @@ func (t *Torrent) addPeer(id HashID, ip net.IP, port uint16, left uint64) {
 		t.seeders++
 		peer.Completed = true
 		t.completed++ // peer starts as seeder (has full file) and counts as completed
-		debug("new peer %s is seeder (completed) @ %s:%d", id.String(), ip, port)
+		if debugEnabled.Load() {
+			debug("new peer %s is seeder (completed) @ %s:%d", id.String(), ip, port)
+		}
 	} else {
 		t.leechers++
 	}
 	t.peers[id] = peer
-	debug("added peer %s @ %s:%d", id.String(), ip, port)
+	t.mu.Unlock()
+	if debugEnabled.Load() {
+		debug("added peer %s @ %s:%d", id.String(), ip, port)
+	}
 }
 
 func (t *Torrent) removePeer(id HashID) {
 	t.mu.Lock()
-	defer t.mu.Unlock()
 
 	p, exists := t.peers[id]
 	if !exists {
+		t.mu.Unlock()
 		return
 	}
 
@@ -144,6 +156,7 @@ func (t *Torrent) removePeer(id HashID) {
 		t.leechers--
 	}
 	delete(t.peers, id)
+	t.mu.Unlock()
 	info("removed peer %s @ %s:%d", id.String(), p.IP, p.Port)
 }
 
