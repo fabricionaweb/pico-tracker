@@ -47,10 +47,6 @@ type config struct {
 }
 
 // parseFlags parses command-line flags and returns configuration.
-// Default values are read from environment variables:
-//   - PICO_TRACKER__PORT: default port (must be > 0)
-//   - PICO_TRACKER__SECRET: secret key for connection ID signing
-//   - DEBUG: enables debug mode if set
 func parseFlags(args []string) config {
 	defaultPort := 1337
 	if p, err := strconv.Atoi(os.Getenv("PICO_TRACKER__PORT")); err == nil && p > 0 {
