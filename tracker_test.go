@@ -478,64 +478,77 @@ func TestGetPeers_NumWantExceedsAvailable(t *testing.T) {
 	}
 }
 
-func TestCleanupLoop_StalePeers(t *testing.T) {
+// TestCleanupStalePeers_Integration tests the full cleanup flow end-to-end.
+func TestCleanupStalePeers_Integration(t *testing.T) {
 	tr := &Tracker{
 		torrents:    make(map[HashID]*Torrent),
 		rateLimiter: make(map[string]*rateLimitEntry),
 	}
 
-	// Create torrent with peers
+	// Create torrent with mix of stale and active peers
 	torrent := tr.getOrCreateTorrent(NewHashID([]byte("12345678901234567890")))
-	peerID1 := NewHashID([]byte("peer1_______________"))
-	peerID2 := NewHashID([]byte("peer2_______________"))
+	staleLeecher := NewHashID([]byte("stale_leecher_______"))
+	staleSeeder := NewHashID([]byte("stale_seeder________"))
+	activePeer := NewHashID([]byte("active_peer_________"))
 
-	// Add peers
-	torrent.addPeer(peerID1, net.ParseIP("192.168.1.1"), 6881, 1000)
-	torrent.addPeer(peerID2, net.ParseIP("192.168.1.2"), 6882, 0)
+	torrent.addPeer(staleLeecher, net.ParseIP("192.168.1.1"), 6881, 1000)
+	torrent.addPeer(staleSeeder, net.ParseIP("192.168.1.2"), 6882, 0)
+	torrent.addPeer(activePeer, net.ParseIP("192.168.1.3"), 6883, 1000)
 
-	// Manually mark peer1 as stale (LastAnnounced > 60 minutes ago)
+	// Mark two peers as stale (70 minutes ago)
+	staleTime := time.Now().Add(-70 * time.Minute)
 	torrent.mu.Lock()
-	torrent.peers[peerID1].LastAnnounced = time.Now().Add(-70 * time.Minute)
+	torrent.peers[staleLeecher].LastAnnounced = staleTime
+	torrent.peers[staleSeeder].LastAnnounced = staleTime
+	torrent.mu.Unlock()
+
+	// Run full cleanup
+	tr.cleanupStalePeers()
+
+	// Verify results
+	torrent.mu.RLock()
+	defer torrent.mu.RUnlock()
+
+	if _, exists := torrent.peers[staleLeecher]; exists {
+		t.Error("stale leecher should have been removed")
+	}
+	if _, exists := torrent.peers[staleSeeder]; exists {
+		t.Error("stale seeder should have been removed")
+	}
+	if _, exists := torrent.peers[activePeer]; !exists {
+		t.Error("active peer should still exist")
+	}
+	if torrent.leechers != 1 {
+		t.Errorf("leechers = %d, want 1 (only active)", torrent.leechers)
+	}
+	if torrent.seeders != 0 {
+		t.Errorf("seeders = %d, want 0", torrent.seeders)
+	}
+}
+
+// TestCleanupStalePeers_RemovesEmptyTorrents verifies empty torrents are deleted.
+func TestCleanupStalePeers_RemovesEmptyTorrents(t *testing.T) {
+	tr := &Tracker{
+		torrents:    make(map[HashID]*Torrent),
+		rateLimiter: make(map[string]*rateLimitEntry),
+	}
+
+	// Create torrent that will become empty after cleanup
+	hash := NewHashID([]byte("will_become_empty___"))
+	torrent := tr.getOrCreateTorrent(hash)
+	stalePeer := NewHashID([]byte("stale_peer__________"))
+
+	torrent.addPeer(stalePeer, net.ParseIP("192.168.1.1"), 6881, 1000)
+
+	// Mark peer as stale
+	torrent.mu.Lock()
+	torrent.peers[stalePeer].LastAnnounced = time.Now().Add(-70 * time.Minute)
 	torrent.mu.Unlock()
 
 	// Run cleanup
 	tr.cleanupStalePeers()
 
-	// Verify stale peer removed, active peer remains
-	torrent.mu.RLock()
-	defer torrent.mu.RUnlock()
-	if _, exists := torrent.peers[peerID1]; exists {
-		t.Error("stale peer should have been removed")
-	}
-	if _, exists := torrent.peers[peerID2]; !exists {
-		t.Error("active peer should still exist")
-	}
-	if torrent.leechers != 0 {
-		t.Errorf("leechers = %d, want 0", torrent.leechers)
-	}
-	if torrent.seeders != 1 {
-		t.Errorf("seeders = %d, want 1", torrent.seeders)
-	}
-}
-
-func TestCleanupLoop_RemovesEmptyTorrents(t *testing.T) {
-	tr := &Tracker{
-		torrents:    make(map[HashID]*Torrent),
-		rateLimiter: make(map[string]*rateLimitEntry),
-	}
-
-	hash := NewHashID([]byte("emptytorrent________"))
-	torrent := tr.getOrCreateTorrent(hash)
-
-	// Add and then remove peer to create empty torrent
-	peerID := NewHashID([]byte("peer1_______________"))
-	torrent.addPeer(peerID, net.ParseIP("192.168.1.1"), 6881, 1000)
-	torrent.removePeer(peerID)
-
-	// Run cleanup
-	tr.cleanupStalePeers()
-
-	// Empty torrent should be removed
+	// Verify torrent was removed (became empty)
 	tr.mu.RLock()
 	defer tr.mu.RUnlock()
 	if _, exists := tr.torrents[hash]; exists {
@@ -543,27 +556,186 @@ func TestCleanupLoop_RemovesEmptyTorrents(t *testing.T) {
 	}
 }
 
-func TestCleanupLoop_RateLimiter(t *testing.T) {
+// TestCleanupStalePeers_EmptyTracker verifies cleanup handles empty tracker gracefully.
+func TestCleanupStalePeers_EmptyTracker(t *testing.T) {
 	tr := &Tracker{
 		torrents:    make(map[HashID]*Torrent),
 		rateLimiter: make(map[string]*rateLimitEntry),
 	}
 
-	// Add stale rate limit entry
+	// Should not panic on empty tracker
+	tr.cleanupStalePeers()
+
+	tr.mu.RLock()
+	defer tr.mu.RUnlock()
+	if len(tr.torrents) != 0 {
+		t.Error("tracker should still be empty")
+	}
+}
+
+// TestCleanupSingleTorrent_Unit tests the individual torrent cleanup function.
+func TestCleanupSingleTorrent_Unit(t *testing.T) {
+	tr := &Tracker{
+		torrents: make(map[HashID]*Torrent),
+	}
+
+	hash := NewHashID([]byte("test_torrent________"))
+	torrent := tr.getOrCreateTorrent(hash)
+
+	// Add mix of peers
+	staleLeecher := NewHashID([]byte("stale_leecher_______"))
+	staleSeeder := NewHashID([]byte("stale_seeder________"))
+	activePeer := NewHashID([]byte("active_peer_________"))
+
+	torrent.addPeer(staleLeecher, net.ParseIP("192.168.1.1"), 6881, 1000)
+	torrent.addPeer(staleSeeder, net.ParseIP("192.168.1.2"), 6882, 0)
+	torrent.addPeer(activePeer, net.ParseIP("192.168.1.3"), 6883, 1000)
+
+	// Mark stale peers
+	staleTime := time.Now().Add(-70 * time.Minute)
+	torrent.mu.Lock()
+	torrent.peers[staleLeecher].LastAnnounced = staleTime
+	torrent.peers[staleSeeder].LastAnnounced = staleTime
+	torrent.mu.Unlock()
+
+	// Test cleanupSingleTorrent directly
+	deadline := time.Now().Add(-stalePeerThreshold)
+	isEmpty := tr.cleanupSingleTorrent(hash, deadline)
+
+	if isEmpty {
+		t.Error("torrent should not be empty (has active peer)")
+	}
+
+	// Verify stale peers removed, active remains
+	torrent.mu.RLock()
+	defer torrent.mu.RUnlock()
+	if len(torrent.peers) != 1 {
+		t.Errorf("peer count = %d, want 1", len(torrent.peers))
+	}
+	if torrent.leechers != 1 || torrent.seeders != 0 {
+		t.Errorf("counters: leechers=%d, seeders=%d, want 1,0", torrent.leechers, torrent.seeders)
+	}
+}
+
+// TestCleanupSingleTorrent_EmptyResult verifies cleanupSingleTorrent returns true when empty.
+func TestCleanupSingleTorrent_EmptyResult(t *testing.T) {
+	tr := &Tracker{
+		torrents: make(map[HashID]*Torrent),
+	}
+
+	hash := NewHashID([]byte("becomes_empty_______"))
+	torrent := tr.getOrCreateTorrent(hash)
+	stalePeer := NewHashID([]byte("stale_______________"))
+
+	torrent.addPeer(stalePeer, net.ParseIP("192.168.1.1"), 6881, 1000)
+	torrent.mu.Lock()
+	torrent.peers[stalePeer].LastAnnounced = time.Now().Add(-70 * time.Minute)
+	torrent.mu.Unlock()
+
+	deadline := time.Now().Add(-stalePeerThreshold)
+	isEmpty := tr.cleanupSingleTorrent(hash, deadline)
+
+	if !isEmpty {
+		t.Error("cleanupSingleTorrent should return true for empty torrent")
+	}
+}
+
+// TestCleanupSingleTorrent_NonExistent verifies cleanup handles deleted torrents.
+func TestCleanupSingleTorrent_NonExistent(t *testing.T) {
+	tr := &Tracker{
+		torrents: make(map[HashID]*Torrent),
+	}
+
+	// Try to cleanup non-existent torrent
+	nonExistent := NewHashID([]byte("does_not_exist______"))
+	deadline := time.Now().Add(-stalePeerThreshold)
+	isEmpty := tr.cleanupSingleTorrent(nonExistent, deadline)
+
+	if isEmpty {
+		t.Error("cleanupSingleTorrent should return false for non-existent torrent")
+	}
+}
+
+// TestRemoveEmptyTorrents_Unit tests the bulk deletion function.
+func TestRemoveEmptyTorrents_Unit(t *testing.T) {
+	tr := &Tracker{
+		torrents: make(map[HashID]*Torrent),
+	}
+
+	// Create two torrents - one empty, one with peers
+	emptyHash := NewHashID([]byte("empty_torrent_______"))
+	nonEmptyHash := NewHashID([]byte("non_empty_torrent___"))
+
+	tr.getOrCreateTorrent(emptyHash)
+	nonEmptyTorrent := tr.getOrCreateTorrent(nonEmptyHash)
+
+	// Add peer to non-empty torrent
+	peerID := NewHashID([]byte("active_peer_________"))
+	nonEmptyTorrent.addPeer(peerID, net.ParseIP("192.168.1.1"), 6881, 1000)
+
+	// Both appear empty initially
+	emptyTorrents := []HashID{emptyHash, nonEmptyHash}
+	tr.removeEmptyTorrents(emptyTorrents)
+
+	// Verify only truly empty torrent was removed
+	tr.mu.RLock()
+	defer tr.mu.RUnlock()
+
+	if _, exists := tr.torrents[emptyHash]; exists {
+		t.Error("empty torrent should have been removed")
+	}
+	if _, exists := tr.torrents[nonEmptyHash]; !exists {
+		t.Error("non-empty torrent should still exist (double-check prevented deletion)")
+	}
+}
+
+// TestCleanupRateLimiters_Unit tests the rate limiter cleanup function directly.
+func TestCleanupRateLimiters_Unit(t *testing.T) {
+	tr := &Tracker{
+		rateLimiter: make(map[string]*rateLimitEntry),
+	}
+
+	// Add entries at different ages
+	deadline := time.Now().Add(-rateLimitCleanupThreshold)
+
 	tr.rateLimiterMu.Lock()
-	tr.rateLimiter["192.168.1.1:6881"] = &rateLimitEntry{
+	tr.rateLimiter["stale"] = &rateLimitEntry{
 		count:       5,
-		windowStart: time.Now().Add(-5 * time.Minute),
+		windowStart: deadline.Add(-time.Minute), // Before deadline - stale
+	}
+	tr.rateLimiter["fresh"] = &rateLimitEntry{
+		count:       3,
+		windowStart: deadline.Add(time.Minute), // After deadline - fresh
 	}
 	tr.rateLimiterMu.Unlock()
 
 	// Run cleanup
-	tr.cleanupStalePeers()
+	tr.cleanupRateLimiters(deadline)
 
-	// Stale entry should be removed (2 windows = 4 minutes)
+	// Verify only stale removed
+	tr.rateLimiterMu.Lock()
+	defer tr.rateLimiterMu.Unlock()
+
+	if _, exists := tr.rateLimiter["stale"]; exists {
+		t.Error("stale entry should have been removed")
+	}
+	if _, exists := tr.rateLimiter["fresh"]; !exists {
+		t.Error("fresh entry should still exist")
+	}
+}
+
+// TestCleanupRateLimiters_Empty verifies cleanup handles empty map.
+func TestCleanupRateLimiters_Empty(t *testing.T) {
+	tr := &Tracker{
+		rateLimiter: make(map[string]*rateLimitEntry),
+	}
+
+	deadline := time.Now().Add(-rateLimitCleanupThreshold)
+	tr.cleanupRateLimiters(deadline) // Should not panic
+
 	tr.rateLimiterMu.Lock()
 	defer tr.rateLimiterMu.Unlock()
 	if len(tr.rateLimiter) != 0 {
-		t.Error("stale rate limiter entry should have been removed")
+		t.Error("rate limiter should still be empty")
 	}
 }

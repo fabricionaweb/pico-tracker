@@ -239,41 +239,102 @@ func (tr *Tracker) sendError(conn net.PacketConn, addr *net.UDPAddr, transaction
 	}
 }
 
-// cleanupStalePeers removes peers that haven't announced recently and deletes
-// torrents that become empty. It also cleans up stale rate limiter entries.
+// cleanupStalePeers removes stale peers and empty torrents, and cleans up rate limiters.
+// Runs periodically (every 30 minutes) from cleanupLoop.
 func (tr *Tracker) cleanupStalePeers() {
-	staleDeadline := time.Now().Add(-stalePeerThreshold)
+	peerDeadline := time.Now().Add(-stalePeerThreshold)
+	rateLimiterDeadline := time.Now().Add(-rateLimitCleanupThreshold)
 
-	tr.mu.Lock()
-	for hash, t := range tr.torrents {
-		t.mu.Lock()
-		for id, p := range t.peers {
-			if p.LastAnnounced.Before(staleDeadline) {
-				if p.Left == 0 {
-					t.seeders--
-				} else {
-					t.leechers--
-				}
-				delete(t.peers, id)
-				if debugEnabled.Load() {
-					debug("cleanup: removed stale peer %s @ %s:%d", id.String(), p.IP, p.Port)
-				}
-			}
+	// Phase 1: Clean peers and identify empty torrents
+	emptyTorrents := tr.cleanupPeersAndFindEmpty(peerDeadline)
+
+	// Phase 2: Remove empty torrents
+	if len(emptyTorrents) > 0 {
+		tr.removeEmptyTorrents(emptyTorrents)
+	}
+
+	// Phase 3: Clean rate limiters
+	tr.cleanupRateLimiters(rateLimiterDeadline)
+}
+
+// cleanupPeersAndFindEmpty processes all torrents, removes stale peers,
+// and returns list of torrent hashes that became empty.
+func (tr *Tracker) cleanupPeersAndFindEmpty(deadline time.Time) []HashID {
+	// Snapshot to allow concurrent access during cleanup
+	tr.mu.RLock()
+	hashes := make([]HashID, 0, len(tr.torrents))
+	for h := range tr.torrents {
+		hashes = append(hashes, h)
+	}
+	tr.mu.RUnlock()
+
+	// Collect empty torrent hashes. No capacity pre-allocation to avoid assumptions
+	// about empty ratio. Go's append handles growth efficiently for typical cases.
+	var empty []HashID
+	for _, hash := range hashes {
+		if isEmpty := tr.cleanupSingleTorrent(hash, deadline); isEmpty {
+			empty = append(empty, hash)
 		}
-		if len(t.peers) == 0 {
-			delete(tr.torrents, hash)
+	}
+	return empty
+}
+
+// cleanupSingleTorrent removes stale peers from one torrent.
+// Returns true if torrent is now empty.
+func (tr *Tracker) cleanupSingleTorrent(hash HashID, deadline time.Time) bool {
+	// Lock ordering: tracker -> torrent, then release tracker
+	tr.mu.RLock()
+	t, exists := tr.torrents[hash]
+	if !exists {
+		tr.mu.RUnlock()
+		return false
+	}
+	t.mu.Lock()
+	tr.mu.RUnlock()
+
+	// Remove stale peers
+	for id, p := range t.peers {
+		if p.LastAnnounced.Before(deadline) {
+			if p.Left == 0 {
+				t.seeders--
+			} else {
+				t.leechers--
+			}
+			delete(t.peers, id)
 			if debugEnabled.Load() {
-				debug("cleanup: removed inactive torrent %s", hash.String())
+				debug("cleanup: removed stale peer %s @ %s:%d", id.String(), p.IP, p.Port)
 			}
 		}
-		t.mu.Unlock()
+	}
+	isEmpty := len(t.peers) == 0
+	t.mu.Unlock()
+	return isEmpty
+}
+
+// removeEmptyTorrents deletes torrents that are still empty after cleanup.
+func (tr *Tracker) removeEmptyTorrents(empty []HashID) {
+	tr.mu.Lock()
+	for _, hash := range empty {
+		if t, ok := tr.torrents[hash]; ok {
+			t.mu.RLock()
+			stillEmpty := len(t.peers) == 0
+			t.mu.RUnlock()
+			if stillEmpty {
+				delete(tr.torrents, hash)
+				if debugEnabled.Load() {
+					debug("cleanup: removed inactive torrent %s", hash.String())
+				}
+			}
+		}
 	}
 	tr.mu.Unlock()
+}
 
+// cleanupRateLimiters removes expired rate limiter entries.
+func (tr *Tracker) cleanupRateLimiters(deadline time.Time) {
 	tr.rateLimiterMu.Lock()
-	rateLimitStaleDeadline := time.Now().Add(-rateLimitCleanupThreshold)
 	for key, rl := range tr.rateLimiter {
-		if !rl.windowStart.After(rateLimitStaleDeadline) {
+		if !rl.windowStart.After(deadline) {
 			delete(tr.rateLimiter, key)
 		}
 	}
