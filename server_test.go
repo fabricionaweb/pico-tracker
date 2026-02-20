@@ -328,3 +328,65 @@ func deriveSecretForTest(secret string) []byte {
 	s := deriveSecret(secret)
 	return s[:]
 }
+
+func TestRateLimiterCleanup_Threshold(t *testing.T) {
+	tr := &Tracker{
+		rateLimiter: make(map[string]*rateLimitEntry),
+	}
+
+	// Add a stale entry (older than 2 windows = 4 minutes)
+	tr.rateLimiterMu.Lock()
+	tr.rateLimiter["192.168.1.1:6881"] = &rateLimitEntry{
+		count:       5,
+		windowStart: time.Now().Add(-5 * time.Minute), // Very stale
+	}
+	tr.rateLimiterMu.Unlock()
+
+	// Add a fresh entry
+	tr.rateLimiterMu.Lock()
+	tr.rateLimiter["192.168.1.2:6881"] = &rateLimitEntry{
+		count:       3,
+		windowStart: time.Now().Add(-30 * time.Second), // Fresh
+	}
+	tr.rateLimiterMu.Unlock()
+
+	// Run cleanup via cleanupStalePeers (which includes rate limiter cleanup)
+	tr.cleanupStalePeers()
+
+	// Verify stale entry removed, fresh remains
+	tr.rateLimiterMu.Lock()
+	defer tr.rateLimiterMu.Unlock()
+
+	if _, exists := tr.rateLimiter["192.168.1.1:6881"]; exists {
+		t.Error("stale rate limiter entry (5 min old) should have been removed")
+	}
+
+	if _, exists := tr.rateLimiter["192.168.1.2:6881"]; !exists {
+		t.Error("fresh rate limiter entry (30 sec old) should still exist")
+	}
+}
+
+func TestRateLimiterCleanup_ExactlyAtThreshold(t *testing.T) {
+	tr := &Tracker{
+		rateLimiter: make(map[string]*rateLimitEntry),
+	}
+
+	// Add entry at exactly 2 windows (4 minutes) - should be cleaned
+	tr.rateLimiterMu.Lock()
+	tr.rateLimiter["192.168.1.1:6881"] = &rateLimitEntry{
+		count:       5,
+		windowStart: time.Now().Add(-2 * rateLimitWindow), // Exactly 2 windows
+	}
+	tr.rateLimiterMu.Unlock()
+
+	// Run cleanup
+	tr.cleanupStalePeers()
+
+	// Verify entry at exactly threshold is removed
+	tr.rateLimiterMu.Lock()
+	defer tr.rateLimiterMu.Unlock()
+
+	if _, exists := tr.rateLimiter["192.168.1.1:6881"]; exists {
+		t.Error("rate limiter entry at exactly 2 windows should have been removed")
+	}
+}
