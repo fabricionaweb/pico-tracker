@@ -12,6 +12,7 @@ A portable BitTorrent tracker implementing the UDP Tracker Protocol (BEP 15). De
 - **Zero-config** - No database required, everything stored in memory
 - **Lightning fast** - All operations happen in RAM
 - **Ephemeral by design** - Clean slate on every restart
+- **Private/whitelist mode** - Optionally restrict to approved info hashes only
 
 ## Usage
 
@@ -49,6 +50,12 @@ PICO_TRACKER__SECRET="your-random-secret-here" ./pico-tracker
 # Enable debug logging
 ./pico-tracker -debug
 
+# Run in private mode with whitelist
+./pico-tracker -whitelist=/path/to/allowed_torrents.txt
+
+# Whitelist via environment variable
+PICO_TRACKER__WHITELIST=/path/to/allowed_torrents.txt ./pico-tracker
+
 # Get help
 ./pico-tracker -help
 
@@ -73,6 +80,9 @@ docker run -p 1337:1337/udp -e DEBUG=1 ghcr.io/fabricionaweb/pico-tracker:latest
 
 # Run with custom secret
 docker run -p 1337:1337/udp -e PICO_TRACKER__SECRET=your-secret ghcr.io/fabricionaweb/pico-tracker:latest
+
+# Run with whitelist (mount your whitelist file)
+docker run -p 1337:1337/udp -v /path/to/whitelist.txt:/whitelist.txt -e PICO_TRACKER__WHITELIST=/whitelist.txt ghcr.io/fabricionaweb/pico-tracker:latest
 ```
 
 ### Configuration
@@ -81,8 +91,28 @@ docker run -p 1337:1337/udp -e PICO_TRACKER__SECRET=your-secret ghcr.io/fabricio
 |------|---------------------|---------|-------------|
 | `-port, -p` | `PICO_TRACKER__PORT` | `1337` | Port to listen on (binds to all interfaces) |
 | `-secret, -s` | `PICO_TRACKER__SECRET` | *(auto)* | Secret key for connection ID signing (see Security below) |
+| `-whitelist` | `PICO_TRACKER__WHITELIST` | *(none)* | Path to whitelist file for private tracker mode |
 | `-debug, -d` | `DEBUG` | `false` | Enable verbose debug logging |
 | `-version, -v` | - | - | Print version |
+
+### Whitelist Mode (Private Tracker)
+
+When running in whitelist mode, only approved torrents can be tracked:
+
+**Whitelist file format:**
+```
+# Comments start with #
+a1b2c3d4e5f6789012345678901234567890abcd
+fedcba0987654321098765432109876543210fedc
+
+e5d4c3b2a1987654321098765432109876543210
+```
+
+- One 40-character hexadecimal info hash per line
+- Empty lines and lines starting with `#` are ignored
+- The file is automatically reloaded every 5 minutes when modified
+- Missing or empty file = block all torrents (fail-closed)
+- Enabling whitelist mode rejects all requests for unlisted info hashes
 
 ## Project Structure
 
