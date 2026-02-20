@@ -28,15 +28,14 @@ type peerInfo struct {
 // until the client can retry. This prevents UDP amplification attacks
 func (tr *Tracker) checkRateLimit(addr *net.UDPAddr) (allowed bool, timeRemaining time.Duration) {
 	key := MakeRateLimitKey(addr)
-	window := rateLimitWindow * time.Minute
+	window := rateLimitWindow
 
 	tr.rateLimiterMu.Lock()
-	defer tr.rateLimiterMu.Unlock()
 
 	rl, exists := tr.rateLimiter[key]
 	if !exists {
-		rl = &rateLimitEntry{count: 1, windowStart: time.Now()}
-		tr.rateLimiter[key] = rl
+		tr.rateLimiter[key] = &rateLimitEntry{count: 1, windowStart: time.Now()}
+		tr.rateLimiterMu.Unlock()
 		return true, 0
 	}
 
@@ -44,14 +43,17 @@ func (tr *Tracker) checkRateLimit(addr *net.UDPAddr) (allowed bool, timeRemainin
 	if elapsed >= window {
 		rl.count = 1
 		rl.windowStart = time.Now()
+		tr.rateLimiterMu.Unlock()
 		return true, 0
 	}
 
 	if rl.count < rateLimitBurst {
 		rl.count++
+		tr.rateLimiterMu.Unlock()
 		return true, 0
 	}
 
+	tr.rateLimiterMu.Unlock()
 	return false, window - elapsed
 }
 
@@ -224,7 +226,7 @@ func (tr *Tracker) sendError(conn net.PacketConn, addr *net.UDPAddr, transaction
 // cleanupStalePeers removes peers that haven't announced recently and deletes
 // torrents that become empty. It also cleans up stale rate limiter entries.
 func (tr *Tracker) cleanupStalePeers() {
-	staleDeadline := time.Now().Add(-stalePeerThreshold * time.Minute)
+	staleDeadline := time.Now().Add(-stalePeerThreshold)
 
 	tr.mu.Lock()
 	for hash, t := range tr.torrents {
@@ -249,7 +251,7 @@ func (tr *Tracker) cleanupStalePeers() {
 	tr.mu.Unlock()
 
 	tr.rateLimiterMu.Lock()
-	rateLimitStaleDeadline := time.Now().Add(-rateLimitWindow * 2 * time.Minute) // 2 windows are definitely stale
+	rateLimitStaleDeadline := time.Now().Add(-rateLimitWindow * 2) // 2 windows are definitely stale
 	for key, rl := range tr.rateLimiter {
 		if rl.windowStart.Before(rateLimitStaleDeadline) {
 			delete(tr.rateLimiter, key)
@@ -260,7 +262,7 @@ func (tr *Tracker) cleanupStalePeers() {
 
 // cleanupLoop periodically runs cleanupStalePeers in a background goroutine
 func (tr *Tracker) cleanupLoop() {
-	ticker := time.NewTicker(cleanupInterval * time.Minute)
+	ticker := time.NewTicker(cleanupInterval)
 	defer ticker.Stop()
 
 	for range ticker.C {

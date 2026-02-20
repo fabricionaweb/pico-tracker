@@ -603,9 +603,8 @@ func TestHandleAnnounce_ResponseInterval(t *testing.T) {
 	tr.handleAnnounce(conn, addr, packet, 12345)
 
 	interval := binary.BigEndian.Uint32(mock.writtenData[8:12])
-	expectedInterval := announceInterval * 60
-	if interval != uint32(expectedInterval) {
-		t.Errorf("interval = %d, want %d", interval, expectedInterval)
+	if interval != announceIntervalSeconds {
+		t.Errorf("interval = %d, want %d", interval, announceIntervalSeconds)
 	}
 }
 

@@ -3,9 +3,7 @@ package main
 import (
 	"context"
 	"encoding/binary"
-	"log"
 	"net"
-	"time"
 )
 
 // Response buffer optimization constants
@@ -139,9 +137,8 @@ func buildAnnounceResponse(peers []byte, seeders, leechers int, transactionID ui
 
 	binary.BigEndian.PutUint32(response[0:4], actionAnnounce)
 	binary.BigEndian.PutUint32(response[4:8], transactionID)
-	interval := announceInterval * int(time.Minute/time.Second)
-	//nolint:gosec // interval is bounded by constants
-	binary.BigEndian.PutUint32(response[8:12], uint32(interval))
+	//nolint:gosec // interval is pre-computed constant
+	binary.BigEndian.PutUint32(response[8:12], announceIntervalSeconds)
 	//nolint:gosec // leechers/seeders are bounded counts
 	binary.BigEndian.PutUint32(response[12:16], uint32(leechers))
 	//nolint:gosec // seeders are bounded counts
@@ -379,7 +376,7 @@ func (tr *Tracker) listen(ctx context.Context, conn *net.UDPConn) {
 			if ctx.Err() != nil {
 				return
 			}
-			log.Printf("[ERROR] Failed to read UDP packet: %v", err)
+			errorLog("Failed to read UDP packet: %v", err)
 			continue
 		}
 

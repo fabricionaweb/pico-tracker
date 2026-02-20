@@ -30,14 +30,18 @@ const (
 	maxPeersPerPacketV6 = 82   // IPv6: 82 * 18 peers = 1496 bytes (under 1500 MTU)
 	defaultNumWant      = 50   // default number of peers to return when client doesn't specify
 
-	announceInterval   = 10 // (minutes) between reannounces
-	cleanupInterval    = 30 // (minutes) to remove stale peers and inactive torrents
-	stalePeerThreshold = 60 // (minutes) allows one missed announce
+	// Time constants as typed Duration for zero runtime overhead
+	announceInterval   = 10 * time.Minute // between reannounces
+	cleanupInterval    = 30 * time.Minute // to remove stale peers and inactive torrents
+	stalePeerThreshold = 60 * time.Minute // allows one missed announce
 
-	rateLimitWindow = 2  // (minutes) window duration for rate limiting
-	rateLimitBurst  = 10 // max connect requests per rateLimitWindow
+	rateLimitWindow = 2 * time.Minute // window duration for rate limiting
+	rateLimitBurst  = 10              // max connect requests per rateLimitWindow
 
 	connectionExpiration = 2 * time.Minute // per BEP 15
+
+	// Pre-computed interval in seconds for announce responses (avoids runtime conversion)
+	announceIntervalSeconds = uint32(announceInterval / time.Second) // 600 seconds
 )
 
 // hmacPool pools HMAC hashers to eliminate allocations in hot path
