@@ -50,6 +50,7 @@ type Tracker struct {
 	mu            sync.RWMutex
 	rateLimiterMu sync.Mutex
 	whitelist     atomic.Pointer[map[HashID]struct{}]
+	secret        [32]byte
 }
 
 type rateLimitEntry struct {
