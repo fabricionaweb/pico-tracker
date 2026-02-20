@@ -114,10 +114,6 @@ e5d4c3b2a1987654321098765432109876543210
 - Missing or empty file = block all torrents (fail-closed)
 - Enabling whitelist mode rejects all requests for unlisted info hashes
 
-**Note:** The tracker automatically try to bind to both:
-- `0.0.0.0:<port>` for IPv4
-- `[::]:<port>` for IPv6
-
 ### Tracker URL
 
 Use this URL format in your torrent files or torrent clients:
