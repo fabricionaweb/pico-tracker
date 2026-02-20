@@ -78,20 +78,20 @@ func TestParseFlags(t *testing.T) {
 		os.Setenv("DEBUG", "1")
 		defer os.Unsetenv("DEBUG")
 
-		parseFlags([]string{})
+		cfg := parseFlags([]string{})
 
-		if !debugMode {
-			t.Error("expected debugMode to be true")
+		if !cfg.debug {
+			t.Error("expected cfg.debug to be true")
 		}
 	})
 
 	t.Run("debug mode from flag", func(t *testing.T) {
 		os.Unsetenv("DEBUG")
 
-		parseFlags([]string{"-debug"})
+		cfg := parseFlags([]string{"-debug"})
 
-		if !debugMode {
-			t.Error("expected debugMode to be true")
+		if !cfg.debug {
+			t.Error("expected cfg.debug to be true")
 		}
 	})
 

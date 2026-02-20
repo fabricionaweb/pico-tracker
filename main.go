@@ -6,16 +6,21 @@ import (
 	"log"
 	"os"
 	"strconv"
+	"sync/atomic"
 )
 
 var version = "dev"
 
-var debugMode bool
+const fallbackSecret = "pico-tracker-default-secret-do-not-use-in-production"
 
-var fallbackSecret = "pico-tracker-default-secret-do-not-use-in-production"
+// debugEnabled is an atomic boolean for thread-safe debug toggle
+var debugEnabled atomic.Bool
 
+// Hot path callers should check debugEnabled.Load() first
+// to avoid expensive argument evaluation (e.g., HashID.String()).
+// This function provides a safety check for non-hot-path calls.
 func debug(format string, v ...any) {
-	if debugMode {
+	if debugEnabled.Load() {
 		log.Printf("[DEBUG] "+format, v...)
 	}
 }
@@ -38,6 +43,7 @@ type config struct {
 	port          int
 	showVersion   bool
 	whitelistPath string
+	debug         bool
 }
 
 // parseFlags parses command-line flags and returns configuration.
@@ -87,8 +93,6 @@ func parseFlags(args []string) config {
 	//nolint:errcheck // Test flags are valid, parsing error will exit
 	_ = fs.Parse(args)
 
-	debugMode = *debug
-
 	// Apply default secret later if not provided (hides from -help output)
 	if *secret == "" {
 		*secret = defaultSecret
@@ -99,6 +103,7 @@ func parseFlags(args []string) config {
 		secret:        *secret,
 		showVersion:   *showVersion,
 		whitelistPath: *whitelist,
+		debug:         *debug,
 	}
 }
 
@@ -109,6 +114,8 @@ func main() {
 		fmt.Println(version)
 		os.Exit(0)
 	}
+
+	debugEnabled.Store(cfg.debug)
 
 	srv := NewServer(cfg)
 

@@ -40,7 +40,7 @@ func (s *Server) Run(ctx context.Context) error {
 	}
 
 	info("Starting Pico Tracker: %s", version)
-	if debugMode {
+	if debugEnabled.Load() {
 		debug("Debug mode is enabled")
 	}
 
