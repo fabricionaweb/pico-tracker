@@ -4,6 +4,7 @@ import (
 	"crypto/hmac"
 	"crypto/sha256"
 	"encoding/binary"
+	"hash"
 	"net"
 	"sync"
 	"time"
@@ -39,7 +40,26 @@ const (
 	connectionExpiration = 2 * time.Minute // per BEP 15
 )
 
-var secretKey [32]byte // secret for syn-cookie connection ID signing (prevents IP spoofing)
+// hmacPool pools HMAC hashers to eliminate allocations in hot path
+var hmacPool = sync.Pool{
+	New: func() any {
+		return hmac.New(sha256.New, nil)
+	},
+}
+
+// getHMAC returns a pooled HMAC hasher with the secret already set
+func getHMAC(secret []byte) hash.Hash {
+	//nolint:errcheck // HMAC pool always returns hash.Hash
+	mac := hmacPool.Get().(hash.Hash)
+	mac.Reset()
+	mac.Write(secret)
+	return mac
+}
+
+// putHMAC returns an HMAC hasher to the pool
+func putHMAC(mac hash.Hash) {
+	hmacPool.Put(mac)
+}
 
 // bufferPool reuses 1500-byte read buffers to reduce allocations and GC pressure
 var bufferPool = sync.Pool{
@@ -87,11 +107,14 @@ func putPeerSlice(s *[]peerInfo) {
 
 // generateConnectionID creates a stateless connection ID using syn-cookie approach
 // Connection ID format: [32-bit timestamp][32-bit signature]
-// Signature = HMAC-SHA256(secret_key, client_ip + timestamp)[0:4]
-func generateConnectionID(addr *net.UDPAddr) uint64 {
+// Signature = HMAC-SHA256(secret, client_ip + timestamp)[0:4]
+func generateConnectionID(addr *net.UDPAddr, secret []byte) uint64 {
 	//nolint:gosec // Intentionally truncating to 32-bit for protocol
 	timestamp := uint32(time.Now().Unix())
-	mac := hmac.New(sha256.New, secretKey[:])
+
+	mac := getHMAC(secret)
+	defer putHMAC(mac)
+
 	mac.Write(addr.IP.To16())
 	var tsBytes [4]byte
 	binary.BigEndian.PutUint32(tsBytes[:], timestamp)
@@ -102,7 +125,7 @@ func generateConnectionID(addr *net.UDPAddr) uint64 {
 }
 
 // validateConnectionID verifies the syn-cookie signature and checks expiration
-func validateConnectionID(id uint64, addr *net.UDPAddr) bool {
+func validateConnectionID(id uint64, addr *net.UDPAddr, secret []byte) bool {
 	//nolint:gosec // Intentionally extracting lower 32 bits for protocol
 	timestamp := uint32(id >> 32)
 
@@ -110,7 +133,9 @@ func validateConnectionID(id uint64, addr *net.UDPAddr) bool {
 		return false
 	}
 
-	mac := hmac.New(sha256.New, secretKey[:])
+	mac := getHMAC(secret)
+	defer putHMAC(mac)
+
 	mac.Write(addr.IP.To16())
 	var tsBytes [4]byte
 	binary.BigEndian.PutUint32(tsBytes[:], timestamp)

@@ -227,7 +227,7 @@ func (tr *Tracker) handleConnect(conn net.PacketConn, addr *net.UDPAddr, transac
 		return
 	}
 
-	connectionID := generateConnectionID(addr)
+	connectionID := generateConnectionID(addr, tr.secret[:])
 
 	// Connect response format: [action:4][transaction_id:4][connection_id:8]
 	// Stack-allocate fixed size response to avoid heap allocation
@@ -339,7 +339,7 @@ func (tr *Tracker) handlePacket(conn net.PacketConn, addr *net.UDPAddr, packet [
 			return
 		}
 	case actionAnnounce, actionScrape:
-		if !validateConnectionID(connectionID, addr) {
+		if !validateConnectionID(connectionID, addr, tr.secret[:]) {
 			debug("invalid or expired connection ID from %s: %d", addr, connectionID)
 			tr.sendError(conn, addr, transactionID, "invalid connection ID")
 			return

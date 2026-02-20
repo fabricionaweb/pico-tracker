@@ -52,12 +52,14 @@ func setupTracker(t *testing.T) *Tracker {
 	t.Helper()
 	h := sha256.New()
 	h.Write([]byte("test-secret"))
-	copy(secretKey[:], h.Sum(nil))
 
-	return &Tracker{
+	tr := &Tracker{
 		torrents:    make(map[HashID]*Torrent),
 		rateLimiter: make(map[string]*rateLimitEntry),
 	}
+	copy(tr.secret[:], h.Sum(nil))
+
+	return tr
 }
 
 func TestHandleConnect_ResponseFormat(t *testing.T) {
@@ -148,7 +150,7 @@ func TestHandleAnnounce_PortZero(t *testing.T) {
 	conn := mock
 	addr := &net.UDPAddr{IP: net.ParseIP("192.168.1.1"), Port: 6881}
 
-	connID := generateConnectionID(addr)
+	connID := generateConnectionID(addr, tr.secret[:])
 
 	// Announce packet format (BEP 15):
 	// [connection_id:8][action:4][transaction_id:4][info_hash:20][peer_id:20]
@@ -182,7 +184,7 @@ func TestHandleAnnounce_IPv6WithNonZeroIPField(t *testing.T) {
 	conn := mock
 	addr := &net.UDPAddr{IP: net.ParseIP("2001:db8::1"), Port: 6881}
 
-	connID := generateConnectionID(addr)
+	connID := generateConnectionID(addr, tr.secret[:])
 
 	packet := make([]byte, 98)
 	binary.BigEndian.PutUint64(packet[0:8], connID)
@@ -213,7 +215,7 @@ func TestHandleAnnounce_AddPeer(t *testing.T) {
 	conn := mock
 	addr := &net.UDPAddr{IP: net.ParseIP("192.168.1.1"), Port: 6881}
 
-	connID := generateConnectionID(addr)
+	connID := generateConnectionID(addr, tr.secret[:])
 	infoHash := NewHashID([]byte("torrent12345678901"))
 
 	packet := make([]byte, 98)
@@ -249,7 +251,7 @@ func TestHandleAnnounce_EventStopped(t *testing.T) {
 	conn := mock
 	addr := &net.UDPAddr{IP: net.ParseIP("192.168.1.1"), Port: 6881}
 
-	connID := generateConnectionID(addr)
+	connID := generateConnectionID(addr, tr.secret[:])
 	infoHash := NewHashID([]byte("torrent12345678901"))
 	peerID := NewHashID([]byte("peer1_______________"))
 
@@ -285,7 +287,7 @@ func TestHandleAnnounce_EventCompleted(t *testing.T) {
 	conn := mock
 	addr := &net.UDPAddr{IP: net.ParseIP("192.168.1.1"), Port: 6881}
 
-	connID := generateConnectionID(addr)
+	connID := generateConnectionID(addr, tr.secret[:])
 	infoHash := NewHashID([]byte("torrent12345678901"))
 
 	packet := make([]byte, 98)
@@ -317,7 +319,7 @@ func TestHandleAnnounce_NumWantClamped(t *testing.T) {
 	conn := mock
 	addr := &net.UDPAddr{IP: net.ParseIP("192.168.1.1"), Port: 6881}
 
-	connID := generateConnectionID(addr)
+	connID := generateConnectionID(addr, tr.secret[:])
 	infoHash := NewHashID([]byte("torrent12345678901"))
 
 	// Add more peers than maxPeersPerPacketV4 (200)
@@ -367,7 +369,7 @@ func TestHandleScrape_NoInfoHashes(t *testing.T) {
 	conn := mock
 	addr := &net.UDPAddr{IP: net.ParseIP("192.168.1.1"), Port: 6881}
 
-	connID := generateConnectionID(addr)
+	connID := generateConnectionID(addr, tr.secret[:])
 
 	packet := make([]byte, 16)
 	binary.BigEndian.PutUint64(packet[0:8], connID)
@@ -388,7 +390,7 @@ func TestHandleScrape_UnknownTorrent(t *testing.T) {
 	conn := mock
 	addr := &net.UDPAddr{IP: net.ParseIP("192.168.1.1"), Port: 6881}
 
-	connID := generateConnectionID(addr)
+	connID := generateConnectionID(addr, tr.secret[:])
 
 	// Scrape packet format (BEP 15):
 	// [connection_id:8][action:4][transaction_id:4][info_hash:20]...
@@ -419,7 +421,7 @@ func TestHandleScrape_ExistingTorrent(t *testing.T) {
 	conn := mock
 	addr := &net.UDPAddr{IP: net.ParseIP("192.168.1.1"), Port: 6881}
 
-	connID := generateConnectionID(addr)
+	connID := generateConnectionID(addr, tr.secret[:])
 	infoHash := NewHashID([]byte("torrent12345678901"))
 
 	torrent := tr.getOrCreateTorrent(infoHash)
@@ -542,7 +544,7 @@ func TestHandlePacket_AnnounceAction(t *testing.T) {
 	conn := mock
 	addr := &net.UDPAddr{IP: net.ParseIP("192.168.1.1"), Port: 6881}
 
-	connID := generateConnectionID(addr)
+	connID := generateConnectionID(addr, tr.secret[:])
 
 	packet := make([]byte, 98)
 	binary.BigEndian.PutUint64(packet[0:8], connID)
@@ -566,7 +568,7 @@ func TestHandlePacket_ScrapeAction(t *testing.T) {
 	conn := mock
 	addr := &net.UDPAddr{IP: net.ParseIP("192.168.1.1"), Port: 6881}
 
-	connID := generateConnectionID(addr)
+	connID := generateConnectionID(addr, tr.secret[:])
 
 	packet := make([]byte, 36)
 	binary.BigEndian.PutUint64(packet[0:8], connID)
@@ -588,7 +590,7 @@ func TestHandleAnnounce_ResponseInterval(t *testing.T) {
 	conn := mock
 	addr := &net.UDPAddr{IP: net.ParseIP("192.168.1.1"), Port: 6881}
 
-	connID := generateConnectionID(addr)
+	connID := generateConnectionID(addr, tr.secret[:])
 
 	packet := make([]byte, 98)
 	binary.BigEndian.PutUint64(packet[0:8], connID)
@@ -613,7 +615,7 @@ func TestHandleAnnounce_IPv4WithCustomIP(t *testing.T) {
 	conn := mock
 	addr := &net.UDPAddr{IP: net.ParseIP("10.0.0.1"), Port: 6881}
 
-	connID := generateConnectionID(addr)
+	connID := generateConnectionID(addr, tr.secret[:])
 	infoHash := NewHashID([]byte("torrent12345678901"))
 	peerID := NewHashID([]byte("peer1_______________"))
 
@@ -643,7 +645,7 @@ func TestHandleAnnounce_IPv6WithIPFieldZero(t *testing.T) {
 	conn := mock
 	addr := &net.UDPAddr{IP: net.ParseIP("2001:db8::1"), Port: 6881}
 
-	connID := generateConnectionID(addr)
+	connID := generateConnectionID(addr, tr.secret[:])
 
 	packet := make([]byte, 98)
 	binary.BigEndian.PutUint64(packet[0:8], connID)
@@ -668,7 +670,7 @@ func TestHandleAnnounce_NumWantZero(t *testing.T) {
 	conn := mock
 	addr := &net.UDPAddr{IP: net.ParseIP("192.168.1.1"), Port: 6881}
 
-	connID := generateConnectionID(addr)
+	connID := generateConnectionID(addr, tr.secret[:])
 	infoHash := NewHashID([]byte("torrent12345678901"))
 
 	// Add more than defaultNumWant (50) peers
@@ -702,7 +704,7 @@ func TestHandleAnnounce_NumWantMaxUint32(t *testing.T) {
 	conn := mock
 	addr := &net.UDPAddr{IP: net.ParseIP("192.168.1.1"), Port: 6881}
 
-	connID := generateConnectionID(addr)
+	connID := generateConnectionID(addr, tr.secret[:])
 	infoHash := NewHashID([]byte("torrent12345678901"))
 
 	// Add more than defaultNumWant (50) peers
@@ -755,7 +757,7 @@ func TestHandleScrape_MultipleInfoHashes(t *testing.T) {
 	conn := mock
 	addr := &net.UDPAddr{IP: net.ParseIP("192.168.1.1"), Port: 6881}
 
-	connID := generateConnectionID(addr)
+	connID := generateConnectionID(addr, tr.secret[:])
 	infoHash1 := NewHashID([]byte("torrent1___________"))
 	infoHash2 := NewHashID([]byte("torrent2___________"))
 
@@ -806,7 +808,7 @@ func TestHandleAnnounce_SeederReannouncesAsSeeder(t *testing.T) {
 	conn := mock
 	addr := &net.UDPAddr{IP: net.ParseIP("192.168.1.1"), Port: 6881}
 
-	connID := generateConnectionID(addr)
+	connID := generateConnectionID(addr, tr.secret[:])
 	infoHash := NewHashID([]byte("torrent12345678901"))
 
 	// First announce: seeder
@@ -841,7 +843,7 @@ func TestHandleAnnounce_LeecherReannouncesAsLeecher(t *testing.T) {
 	conn := mock
 	addr := &net.UDPAddr{IP: net.ParseIP("192.168.1.1"), Port: 6881}
 
-	connID := generateConnectionID(addr)
+	connID := generateConnectionID(addr, tr.secret[:])
 	infoHash := NewHashID([]byte("torrent12345678901"))
 
 	// First announce: leecher
@@ -876,7 +878,7 @@ func TestHandleAnnounce_ResponseSeedersLeechers(t *testing.T) {
 	conn := mock
 	addr := &net.UDPAddr{IP: net.ParseIP("192.168.1.1"), Port: 6881}
 
-	connID := generateConnectionID(addr)
+	connID := generateConnectionID(addr, tr.secret[:])
 	infoHash := NewHashID([]byte("torrent12345678901"))
 
 	// Add 3 seeders, 2 leechers
@@ -914,7 +916,7 @@ func TestHandleAnnounce_IPv6PeerFormat(t *testing.T) {
 	conn := mock
 	addr := &net.UDPAddr{IP: net.ParseIP("2001:db8::1"), Port: 6881}
 
-	connID := generateConnectionID(addr)
+	connID := generateConnectionID(addr, tr.secret[:])
 	infoHash := NewHashID([]byte("torrent12345678901"))
 
 	tr.getOrCreateTorrent(infoHash).addPeer(NewHashID([]byte("peer1_______________")), net.ParseIP("2001:db8::1"), 6881, 0)
@@ -942,7 +944,7 @@ func TestHandleScrape_CompletedField(t *testing.T) {
 	conn := mock
 	addr := &net.UDPAddr{IP: net.ParseIP("192.168.1.1"), Port: 6881}
 
-	connID := generateConnectionID(addr)
+	connID := generateConnectionID(addr, tr.secret[:])
 	infoHash := NewHashID([]byte("torrent12345678901"))
 
 	torrent := tr.getOrCreateTorrent(infoHash)
@@ -974,7 +976,7 @@ func TestHandleAnnounce_NumWantLessThanAvailable(t *testing.T) {
 	conn := mock
 	addr := &net.UDPAddr{IP: net.ParseIP("192.168.1.1"), Port: 6881}
 
-	connID := generateConnectionID(addr)
+	connID := generateConnectionID(addr, tr.secret[:])
 	infoHash := NewHashID([]byte("torrent12345678901"))
 
 	// Add 10 peers
@@ -1008,7 +1010,7 @@ func TestHandleAnnounce_IPv6PeersToIPv4Client(t *testing.T) {
 	conn := mock
 	addr := &net.UDPAddr{IP: net.ParseIP("192.168.1.1"), Port: 6881} // IPv4 client
 
-	connID := generateConnectionID(addr)
+	connID := generateConnectionID(addr, tr.secret[:])
 	infoHash := NewHashID([]byte("torrent12345678901"))
 
 	// Add only IPv6 peers
@@ -1038,7 +1040,7 @@ func TestHandleAnnounce_IPv4PeersToIPv6Client(t *testing.T) {
 	conn := mock
 	addr := &net.UDPAddr{IP: net.ParseIP("2001:db8::1"), Port: 6881} // IPv6 client
 
-	connID := generateConnectionID(addr)
+	connID := generateConnectionID(addr, tr.secret[:])
 	infoHash := NewHashID([]byte("torrent12345678901"))
 
 	// Add only IPv4 peers
@@ -1068,7 +1070,7 @@ func TestHandleAnnounce_EventStarted(t *testing.T) {
 	conn := mock
 	addr := &net.UDPAddr{IP: net.ParseIP("192.168.1.1"), Port: 6881}
 
-	connID := generateConnectionID(addr)
+	connID := generateConnectionID(addr, tr.secret[:])
 	infoHash := NewHashID([]byte("torrent12345678901"))
 
 	// eventStarted should add/update peer
@@ -1098,7 +1100,7 @@ func TestHandleAnnounce_EventNone(t *testing.T) {
 	conn := mock
 	addr := &net.UDPAddr{IP: net.ParseIP("192.168.1.1"), Port: 6881}
 
-	connID := generateConnectionID(addr)
+	connID := generateConnectionID(addr, tr.secret[:])
 	infoHash := NewHashID([]byte("torrent12345678901"))
 
 	// eventNone (0) is default - regular update, should add peer like eventStarted
@@ -1133,7 +1135,7 @@ func TestHandleAnnounce_PeerIPPortEncoding(t *testing.T) {
 	conn := mock
 	addr := &net.UDPAddr{IP: net.ParseIP("192.168.1.1"), Port: 6881}
 
-	connID := generateConnectionID(addr)
+	connID := generateConnectionID(addr, tr.secret[:])
 	infoHash := NewHashID([]byte("torrent12345678901"))
 
 	// Add a peer with known IP and port
@@ -1173,7 +1175,7 @@ func TestHandleAnnounce_InvalidConnectionID(t *testing.T) {
 	addr := &net.UDPAddr{IP: net.ParseIP("192.168.1.1"), Port: 6881}
 
 	// Create valid connection ID then modify it
-	validConnID := generateConnectionID(addr)
+	validConnID := generateConnectionID(addr, tr.secret[:])
 	invalidConnID := validConnID ^ 0xFFFFFFFF // Flip all bits in signature
 
 	packet := make([]byte, 98)
@@ -1204,7 +1206,7 @@ func TestHandleScrape_InvalidConnectionID(t *testing.T) {
 	addr := &net.UDPAddr{IP: net.ParseIP("192.168.1.1"), Port: 6881}
 
 	// Create valid connection ID then modify it
-	validConnID := generateConnectionID(addr)
+	validConnID := generateConnectionID(addr, tr.secret[:])
 	invalidConnID := validConnID ^ 0xFFFFFFFF // Flip all bits in signature
 
 	packet := make([]byte, 36)
@@ -1311,7 +1313,7 @@ func TestFullFlow_AnnounceWithPeerExchange(t *testing.T) {
 	addr2 := &net.UDPAddr{IP: net.ParseIP("192.168.1.2"), Port: 6882}
 
 	// Peer 1 announces
-	connID1 := generateConnectionID(addr1)
+	connID1 := generateConnectionID(addr1, tr.secret[:])
 	packet1 := make([]byte, 98)
 	binary.BigEndian.PutUint64(packet1[0:8], connID1)
 	binary.BigEndian.PutUint32(packet1[8:12], actionAnnounce)
@@ -1324,7 +1326,7 @@ func TestFullFlow_AnnounceWithPeerExchange(t *testing.T) {
 
 	// Peer 2 announces and should get Peer 1 in response
 	mock.writtenData = nil
-	connID2 := generateConnectionID(addr2)
+	connID2 := generateConnectionID(addr2, tr.secret[:])
 	packet2 := make([]byte, 98)
 	binary.BigEndian.PutUint64(packet2[0:8], connID2)
 	binary.BigEndian.PutUint32(packet2[8:12], actionAnnounce)
