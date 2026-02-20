@@ -114,16 +114,6 @@ e5d4c3b2a1987654321098765432109876543210
 - Missing or empty file = block all torrents (fail-closed)
 - Enabling whitelist mode rejects all requests for unlisted info hashes
 
-## Project Structure
-
-```
-main.go       - Entry point and server setup
-handlers.go   - UDP request handlers (connect, announce, scrape, listen)
-tracker.go    - Core tracker logic (peer management, rate limiting, cleanup)
-protocol.go   - Protocol constants and connection ID validation
-types.go      - Data types (HashID, Peer, Torrent, Tracker)
-```
-
 **Note:** The tracker automatically try to bind to both:
 - `0.0.0.0:<port>` for IPv4
 - `[::]:<port>` for IPv6
