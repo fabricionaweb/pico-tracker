@@ -73,6 +73,7 @@ func MakeRateLimitKey(addr *net.UDPAddr) string {
 	// Build key: 16 bytes IP + 2 bytes port = 18 bytes
 	var key [18]byte
 	copy(key[:16], ip)
+	//nolint:gosec // G115: Port is 0-65535, safe to convert to uint16
 	binary.BigEndian.PutUint16(key[16:18], uint16(addr.Port))
 	return string(key[:])
 }
@@ -195,7 +196,8 @@ func (t *Torrent) getPeers(
 	numPeers := min(numWant, len(allPeers))
 	peers = make([]byte, 0, numPeers*peerSize)
 
-	//nolint:gosec // crypto/rand not needed for peer selection
+	//nolint:gosec // G404: math/rand acceptable for peer selection
+	// (performance matters, cryptographic security not required)
 	start := rand.Intn(len(allPeers))
 	for i := range numPeers {
 		p := allPeers[(start+i)%len(allPeers)]

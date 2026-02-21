@@ -56,8 +56,10 @@ var hmacPool = sync.Pool{
 
 // getHMAC returns a pooled HMAC hasher with the secret already set
 func getHMAC(secret []byte) hash.Hash {
-	//nolint:errcheck // HMAC pool always returns hash.Hash
-	mac := hmacPool.Get().(hash.Hash)
+	mac, ok := hmacPool.Get().(hash.Hash)
+	if !ok {
+		panic("hmacPool returned unexpected type")
+	}
 	mac.Reset()
 	mac.Write(secret)
 	return mac
@@ -77,8 +79,10 @@ var bufferPool = sync.Pool{
 }
 
 func getBuffer() *[]byte {
-	//nolint:errcheck // Buffer pool always returns *[]byte
-	buf := bufferPool.Get().(*[]byte)
+	buf, ok := bufferPool.Get().(*[]byte)
+	if !ok {
+		panic("bufferPool returned unexpected type")
+	}
 	// Restore full capacity - putBuffer resets the slice to [:0] for the pool,
 	// but net.UDPConn.ReadFromUDP respects len(buf) not cap(buf). Without this,
 	// reading into the buffer would see length 0 and return n=0.
@@ -101,8 +105,11 @@ var peerSlicePool = sync.Pool{
 }
 
 func getPeerSlice() *[]peerInfo {
-	//nolint:errcheck // Peer slice pool always returns *[]peerInfo
-	return peerSlicePool.Get().(*[]peerInfo)
+	s, ok := peerSlicePool.Get().(*[]peerInfo)
+	if !ok {
+		panic("peerSlicePool returned unexpected type")
+	}
+	return s
 }
 
 func putPeerSlice(s *[]peerInfo) {
@@ -138,6 +145,7 @@ func validateConnectionID(id uint64, addr *net.UDPAddr, secret []byte) bool {
 
 	// Zero-allocation expiration check: compare uint32 timestamps directly
 	// instead of converting to time.Time and calling time.Since()
+	//nolint:gosec // G115: Protocol requires 32-bit timestamp per BEP 15
 	now := uint32(time.Now().Unix())
 	if now > timestamp && now-timestamp > connectionExpirationSeconds {
 		return false

@@ -10,10 +10,9 @@ import (
 	"time"
 )
 
-//nolint:govet // Field alignment is acceptable
 type Server struct {
-	cfg config
 	tr  *Tracker
+	cfg config
 }
 
 // NewServer creates and initializes a new server instance
@@ -71,11 +70,13 @@ func (s *Server) Run(ctx context.Context) error {
 	<-ctx.Done()
 	info("Shutting down gracefully...")
 
-	//nolint:errcheck // Connection close errors are ignored during shutdown
-	conn4.Close()
+	if err := conn4.Close(); err != nil {
+		debug("Failed to close IPv4 connection: %v", err)
+	}
 	if conn6 != nil {
-		//nolint:errcheck // Connection close errors are ignored during shutdown
-		conn6.Close()
+		if err := conn6.Close(); err != nil {
+			debug("Failed to close IPv6 connection: %v", err)
+		}
 	}
 
 	info("Waiting for in-flight requests to complete...")

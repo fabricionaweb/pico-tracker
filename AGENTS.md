@@ -118,6 +118,18 @@ CI runs the exact same lint check. Any lint error that passes locally will fail 
 - Check the config file for enabled linters and exclusions
 - When adding workarounds for lint issues, use nolint comments or config exclusions (see existing patterns in the codebase)
 
+### Modifying golangci-lint Config (IMPORTANT)
+- **NEVER** modify `.golangci.yml` without explicit user instruction
+- When facing lint errors, follow this priority:
+  1. **Fix the code** - Address the underlying issue properly
+  2. **Add nolint comment** - Use `//nolint:<linter>` with a detailed reason explaining why the exception is justified
+  3. **Only if absolutely necessary** - Ask user before modifying config
+- Exception: Only `*_test.go` exclusions are acceptable without explicit approval
+- Prefer inline comments over config changes to keep context with the code
+- Examples of good nolint comments:
+  - `//nolint:gosec // G115: Protocol requires 32-bit field per BEP 15`
+  - `//nolint:govet // Field alignment optimized for memory layout`
+
 ## Skills
 
 ### Always Parse

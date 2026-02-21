@@ -21,8 +21,11 @@ func loadWhitelistFile(path string) map[HashID]struct{} {
 		info("failed to open whitelist file: %v", err)
 		return make(map[HashID]struct{}) // Fail-closed: return empty map to block all
 	}
-	//nolint:errcheck // File close errors ignored during read
-	defer file.Close()
+	defer func() {
+		if err := file.Close(); err != nil {
+			info("error closing whitelist file: %v", err)
+		}
+	}()
 
 	hashes := make(map[HashID]struct{})
 	scanner := bufio.NewScanner(file)

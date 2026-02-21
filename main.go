@@ -37,12 +37,11 @@ func errorLog(format string, v ...any) {
 	log.Printf("[ERROR] "+format, v...)
 }
 
-//nolint:govet // Field alignment is acceptable
 type config struct {
 	secret        string
+	whitelistPath string
 	port          int
 	showVersion   bool
-	whitelistPath string
 	debug         bool
 }
 
@@ -85,9 +84,10 @@ func parseFlags(args []string) config {
 		fmt.Fprintf(os.Stderr, "\n")
 	}
 
-	// With ExitOnError, flag package exits on error
-	//nolint:errcheck // Test flags are valid, parsing error will exit
-	_ = fs.Parse(args)
+	if err := fs.Parse(args); err != nil {
+		// ExitOnError means this should never happen, but handle it for linting
+		log.Fatalf("[ERROR] Failed to parse flags: %v", err)
+	}
 
 	// Apply default secret later if not provided (hides from -help output)
 	if *secret == "" {
@@ -108,17 +108,22 @@ func main() {
 
 	if cfg.showVersion {
 		fmt.Println(version)
-		os.Exit(0)
+		return
 	}
 
 	debugEnabled.Store(cfg.debug)
 
 	srv := NewServer(cfg)
 
-	ctx, stop := setupSignalHandling()
-	defer stop()
-
-	if err := srv.Run(ctx); err != nil {
+	if err := runServer(srv); err != nil {
 		log.Fatalf("[ERROR] Server error: %v", err)
 	}
+}
+
+// runServer starts the server with signal handling.
+// Extracted to avoid exitAfterDefer warning in main.
+func runServer(srv *Server) error {
+	ctx, stop := setupSignalHandling()
+	defer stop()
+	return srv.Run(ctx)
 }

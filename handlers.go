@@ -75,10 +75,11 @@ func calculateNumWant(numWantRaw uint32, maxWant int) int {
 	if numWantRaw == 0 || numWantRaw == 0xFFFFFFFF {
 		return defaultNumWant
 	}
-	// #nosec G115 -- numWantRaw is validated as <= maxWant
+	//nolint:gosec // G115: maxWant is bounded, safe to convert
 	if numWantRaw > uint32(maxWant) {
 		return maxWant
 	}
+	//nolint:gosec // G115: Protocol requires 32-bit to int conversion per BEP 15
 	return int(numWantRaw)
 }
 
@@ -137,11 +138,11 @@ func buildAnnounceResponse(peers []byte, seeders, leechers int, transactionID ui
 
 	binary.BigEndian.PutUint32(response[0:4], actionAnnounce)
 	binary.BigEndian.PutUint32(response[4:8], transactionID)
-	//nolint:gosec // interval is pre-computed constant
+	//nolint:gosec // G115: announceIntervalSeconds is pre-computed constant
 	binary.BigEndian.PutUint32(response[8:12], announceIntervalSeconds)
-	//nolint:gosec // leechers/seeders are bounded counts
+	//nolint:gosec // G115: leechers/seeders are bounded int counts
 	binary.BigEndian.PutUint32(response[12:16], uint32(leechers))
-	//nolint:gosec // seeders are bounded counts
+	//nolint:gosec // G115: seeders are bounded int counts
 	binary.BigEndian.PutUint32(response[16:20], uint32(seeders))
 	// Fast copy: only copy if there are peers (avoids slice bounds check in empty case)
 	if len(peers) > 0 {
@@ -157,11 +158,11 @@ func (tr *Tracker) getScrapeStats(infoHash HashID) scrapeStats {
 	torrent := tr.getTorrent(infoHash)
 	if torrent != nil {
 		torrent.mu.RLock()
-		//nolint:gosec // seeders/leechers/completed are bounded int counts
+		//nolint:gosec // G115: seeders/leechers/completed are bounded int counts
 		s.seeders = uint32(torrent.seeders)
-		//nolint:gosec // seeders/leechers/completed are bounded int counts
+		//nolint:gosec // G115: seeders/leechers/completed are bounded int counts
 		s.completed = uint32(torrent.completed)
-		//nolint:gosec // seeders/leechers/completed are bounded int counts
+		//nolint:gosec // G115: seeders/leechers/completed are bounded int counts
 		s.leechers = uint32(torrent.leechers)
 		torrent.mu.RUnlock()
 	}
