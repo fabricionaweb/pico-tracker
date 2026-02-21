@@ -1,7 +1,6 @@
 package main
 
 import (
-	"crypto/hmac"
 	"crypto/sha256"
 	"encoding/binary"
 	"hash"
@@ -47,27 +46,23 @@ const (
 	connectionExpirationSeconds = uint32(connectionExpiration / time.Second) // 120 seconds
 )
 
-// hmacPool pools HMAC hashers to eliminate allocations in hot path
-var hmacPool = sync.Pool{
+// shaPool pools SHA256 hashers to eliminate allocations in the hot path
+var shaPool = sync.Pool{
 	New: func() any {
-		return hmac.New(sha256.New, nil)
+		return sha256.New()
 	},
 }
 
-// getHMAC returns a pooled HMAC hasher with the secret already set
-func getHMAC(secret []byte) hash.Hash {
-	mac, ok := hmacPool.Get().(hash.Hash)
+func getSHA() hash.Hash {
+	h, ok := shaPool.Get().(hash.Hash)
 	if !ok {
-		panic("hmacPool returned unexpected type")
+		panic("shaPool returned unexpected type")
 	}
-	mac.Reset()
-	mac.Write(secret)
-	return mac
+	return h
 }
 
-// putHMAC returns an HMAC hasher to the pool
-func putHMAC(mac hash.Hash) {
-	hmacPool.Put(mac)
+func putSHA(h hash.Hash) {
+	shaPool.Put(h)
 }
 
 // bufferPool reuses 1500-byte read buffers to reduce allocations and GC pressure
@@ -117,49 +112,41 @@ func putPeerSlice(s *[]peerInfo) {
 	peerSlicePool.Put(s)
 }
 
-// Connection ID generation and validation
-
 // generateConnectionID creates a stateless connection ID using syn-cookie approach
 // Connection ID format: [32-bit timestamp][32-bit signature]
-// Signature = HMAC-SHA256(secret, client_ip + timestamp)[0:4]
+// Signature = SHA256(secret || client_ip || timestamp)[0:4]
 func generateConnectionID(addr *net.UDPAddr, secret []byte) uint64 {
-	//nolint:gosec // Intentionally truncating to 32-bit for protocol
+	//nolint:gosec // G115: Protocol requires 32-bit timestamp per BEP 15
 	timestamp := uint32(time.Now().Unix())
-
-	mac := getHMAC(secret)
-	defer putHMAC(mac)
-
-	mac.Write(addr.IP.To16())
-	var tsBytes [4]byte
-	binary.BigEndian.PutUint32(tsBytes[:], timestamp)
-	mac.Write(tsBytes[:])
-	sig := binary.BigEndian.Uint32(mac.Sum(nil)[:4])
-
-	return uint64(timestamp)<<32 | uint64(sig)
+	h := getSHA()
+	sig := computeSignature(h, secret, addr.IP, timestamp)
+	putSHA(h)
+	return (uint64(timestamp) << 32) | uint64(sig)
 }
 
 // validateConnectionID verifies the syn-cookie signature and checks expiration
 func validateConnectionID(id uint64, addr *net.UDPAddr, secret []byte) bool {
-	//nolint:gosec // Intentionally extracting lower 32 bits for protocol
+	//nolint:gosec // G115: Protocol requires 32-bit timestamp per BEP 15
 	timestamp := uint32(id >> 32)
-
-	// Zero-allocation expiration check: compare uint32 timestamps directly
-	// instead of converting to time.Time and calling time.Since()
 	//nolint:gosec // G115: Protocol requires 32-bit timestamp per BEP 15
 	now := uint32(time.Now().Unix())
 	if now > timestamp && now-timestamp > connectionExpirationSeconds {
 		return false
 	}
+	h := getSHA()
+	sig := computeSignature(h, secret, addr.IP, timestamp)
+	putSHA(h)
+	//nolint:gocritic,gosec // Comparing lower 32 bits of connection ID with signature
+	return uint32(id) == sig
+}
 
-	mac := getHMAC(secret)
-	defer putHMAC(mac)
-
-	mac.Write(addr.IP.To16())
-	var tsBytes [4]byte
-	binary.BigEndian.PutUint32(tsBytes[:], timestamp)
-	mac.Write(tsBytes[:])
-	expected := binary.BigEndian.Uint32(mac.Sum(nil)[:4])
-
-	//nolint:gosec,gocritic // Intentionally comparing lower 32 bits
-	return uint32(id) == expected
+// computeSignature creates a 32-bit signature from secret, IP and timestamp
+func computeSignature(h hash.Hash, secret []byte, ip net.IP, timestamp uint32) uint32 {
+	h.Reset() // Ensure clean state when reusing hasher from pool
+	h.Write(secret)
+	h.Write(ip.To16())
+	var ts [4]byte
+	binary.BigEndian.PutUint32(ts[:], timestamp)
+	h.Write(ts[:])
+	return binary.BigEndian.Uint32(h.Sum(nil))
 }

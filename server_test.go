@@ -1,10 +1,8 @@
 package main
 
 import (
-	"bytes"
 	"context"
 	"crypto/sha256"
-	"encoding/binary"
 	"net"
 	"sync"
 	"sync/atomic"
@@ -229,37 +227,38 @@ func deriveSecret(secret string) [32]byte {
 // Ensure debugEnabled is accessed properly
 var _ = atomic.Bool{}
 
-func TestHMACPool_CleanState(t *testing.T) {
+func TestSHAPool_CleanState(t *testing.T) {
 	secret1 := []byte("secret-one")
 	secret2 := []byte("secret-two")
+	addr := &net.UDPAddr{IP: net.ParseIP("192.168.1.1"), Port: 6881}
+	timestamp := uint32(time.Now().Unix())
 
-	// Get HMAC hasher and use it with secret1
-	mac1 := getHMAC(secret1)
-	mac1.Write([]byte("some data"))
-	sum1 := mac1.Sum(nil)
-	putHMAC(mac1)
+	// Get hasher and use it with secret1
+	h1 := getSHA()
+	sig1 := computeSignature(h1, secret1, addr.IP, timestamp)
+	putSHA(h1)
 
 	// Get hasher again - should be clean
-	mac2 := getHMAC(secret2)
-	mac2.Write([]byte("some data"))
-	sum2 := mac2.Sum(nil)
-	putHMAC(mac2)
+	h2 := getSHA()
+	sig2 := computeSignature(h2, secret2, addr.IP, timestamp)
+	putSHA(h2)
 
 	// Different secrets should produce different results
-	if bytes.Equal(sum1, sum2) {
-		t.Error("HMAC with different secrets produced same result - pool not resetting properly")
+	if sig1 == sig2 {
+		t.Error("Signatures with different secrets are the same - pool not resetting properly")
 	}
 }
 
-func TestHMACPool_Reuse(_ *testing.T) {
+func TestSHAPool_Reuse(_ *testing.T) {
 	secret := []byte("test-secret")
+	addr := &net.UDPAddr{IP: net.ParseIP("192.168.1.1"), Port: 6881}
+	timestamp := uint32(time.Now().Unix())
 
 	// Get and return multiple times
 	for i := 0; i < 10; i++ {
-		mac := getHMAC(secret)
-		mac.Write([]byte("data"))
-		_ = mac.Sum(nil)
-		putHMAC(mac)
+		h := getSHA()
+		_ = computeSignature(h, secret, addr.IP, timestamp)
+		putSHA(h)
 	}
 
 	// If we get here without panic, pool is working
@@ -311,16 +310,10 @@ func TestConnectionIDExpiration_FutureTimestamp(t *testing.T) {
 
 // generateConnectionIDWithTimestamp creates a connection ID with a specific timestamp
 func generateConnectionIDWithTimestamp(addr *net.UDPAddr, secret []byte, timestamp uint32) uint64 {
-	mac := getHMAC(secret)
-	defer putHMAC(mac)
-
-	mac.Write(addr.IP.To16())
-	var tsBytes [4]byte
-	binary.BigEndian.PutUint32(tsBytes[:], timestamp)
-	mac.Write(tsBytes[:])
-	sig := binary.BigEndian.Uint32(mac.Sum(nil)[:4])
-
-	return uint64(timestamp)<<32 | uint64(sig)
+	h := getSHA()
+	sig := computeSignature(h, secret, addr.IP, timestamp)
+	putSHA(h)
+	return (uint64(timestamp) << 32) | uint64(sig)
 }
 
 // deriveSecretForTest is a helper for tests that need a secret byte slice
